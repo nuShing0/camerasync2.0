@@ -2,6 +2,7 @@ import { NavLink } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import { useNewSession } from "./NewSession.jsx";
+import { useGroupTheme } from "../theme/GroupThemeContext.jsx"; // for appearance toggle
 
 // Three-person "group" mark. Inline SVG rather than an emoji so it stays
 // monochrome and inherits the nav item's color on hover/active.
@@ -132,6 +133,7 @@ const NAV_ITEMS = [
 export function Sidebar() {
   const { user, logout } = useAuth();
   const openNewSession = useNewSession();
+  const { mode, toggleMode } = useGroupTheme(); // appearance toggle
 
   return (
     <nav style={styles.sidebar}>
@@ -167,6 +169,17 @@ export function Sidebar() {
 
       <div style={styles.footer}>
         {user && <div style={styles.user}>{user.name || user.email}</div>}
+        {/* appearance toggle */}
+        <button
+          type="button"
+          className="kh-logout"
+          onClick={toggleMode}
+          title="Switch light/dark appearance"
+        >
+          <span aria-hidden="true">{mode === "dark" ? "☀" : "☾"}</span>{" "}
+          {mode === "dark" ? "Light" : "Dark"}
+        </button>
+        <br />
         <button
           type="button"
           className="kh-logout"

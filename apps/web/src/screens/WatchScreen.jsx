@@ -160,11 +160,11 @@ const css = `
   .watch-page h1 { margin: 0 0 1.5rem; font-size: 1.8rem; }
   .watch-page p { color: #999; line-height: 1.6; }
   .watch-page a { color: var(--accent); }
-  .watch-page .watch-error { color: #ff8a80; }
+  .watch-page .watch-error { color: var(--error-ink); }
   .watch-group {
-    border: 1px solid #2a2a2a;
+    border: 1px solid var(--raised);
     border-radius: 12px;
-    background: #1c1c1c;
+    background: var(--card-hover);
     overflow: hidden;
   }
   .watch-group-header {
@@ -172,7 +172,7 @@ const css = `
     align-items: center;
     gap: 12px;
     padding: 1rem;
-    background: #292929;
+    background: var(--raised);
   }
   .watch-group-header select {
     min-width: 0;
@@ -180,8 +180,8 @@ const css = `
     padding: 0.4rem;
     border: 1px solid #555;
     border-radius: 6px;
-    background: #1c1c1c;
-    color: #f0f0f0;
+    background: var(--card-hover);
+    color: var(--text-strong);
     font: inherit;
   }
   .watch-group-content { padding: 1rem; }
@@ -199,9 +199,9 @@ const css = `
     display: flex;
     align-items: center;
     margin-bottom: 8px;
-    border: 1px solid #2a2a2a;
+    border: 1px solid var(--raised);
     border-radius: 8px;
-    background: #1c1c1c;
+    background: var(--card-hover);
     overflow: hidden;
   }
   .watch-session button {
@@ -214,7 +214,7 @@ const css = `
     padding: 16px;
     border: none;
     background: transparent;
-    color: #f0f0f0;
+    color: var(--text-strong);
     font: inherit;
     text-align: left;
     cursor: pointer;
@@ -231,10 +231,10 @@ const css = `
     color: #ff6b6b;
     font-size: 1.3rem;
   }
-  .watch-session .watch-delete:hover { background: #472222; }
+  .watch-session .watch-delete:hover { background: var(--error-bg); }
   .watch-session .watch-delete:disabled { opacity: 0.4; cursor: default; }
-  .watch-session button:hover { background: #262626; }
-  .watch-session button[aria-expanded="true"] { background: #262626; }
+  .watch-session button:hover { background: var(--field); }
+  .watch-session button[aria-expanded="true"] { background: var(--field); }
   .watch-session strong { overflow-wrap: anywhere; }
   .watch-session time { color: #999; font-size: 0.9rem; }
   .watch-session p { margin: 0; padding: 16px; }

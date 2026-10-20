@@ -369,7 +369,7 @@ const css = `
     flex-wrap: wrap;
     gap: 16px;
   }
-  .home-date { color: #d0d0d0; font-size: 1rem; margin-bottom: 4px; }
+  .home-date { color: var(--text-soft); font-size: 1rem; margin-bottom: 4px; }
   .home-title { margin: 0; font-size: 2.1rem; font-weight: 800; letter-spacing: -0.5px; }
 
   .home-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
@@ -379,12 +379,12 @@ const css = `
     align-items: center;
     gap: 10px;
     padding: 24px 12px;
-    background: #161616;
+    background: var(--card);
     border-radius: 16px;
   }
   .home-stat-link { color: inherit; text-decoration: none; border: 1px solid transparent; transition: border-color 0.12s, background 0.12s; }
-  .home-stat-link:hover, .home-stat-link:focus-visible { border-color: var(--accent); background: #1c1c1c; }
-  .home-stat span { color: #a0a0a0; font-size: 1rem; }
+  .home-stat-link:hover, .home-stat-link:focus-visible { border-color: var(--accent); background: var(--card-hover); }
+  .home-stat span { color: var(--text-muted); font-size: 1rem; }
   .home-stat strong { font-size: 2.4rem; font-weight: 800; line-height: 1; }
 
   /* The live card shares the stats' row, so it's the same height as them:
@@ -407,11 +407,11 @@ const css = `
   .home-live-info { flex: 1; min-width: 0; }
   .home-live-actions { flex: 0 0 auto; text-align: center; }
   .home-live-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; }
-  .home-live-hint { color: #999; font-size: 0.9rem; }
+  .home-live-hint { color: var(--text-muted); font-size: 0.9rem; }
   .home-create { display: flex; gap: 10px; }
   .home-create button {
     font: inherit; font-weight: 700; padding: 0.6rem 1.1rem; border-radius: 10px;
-    border: 1px solid #444; background: transparent; color: #f0f0f0; cursor: pointer;
+    border: 1px solid var(--line-strong); background: transparent; color: var(--text-strong); cursor: pointer;
   }
   .home-create button:hover { border-color: var(--accent); }
   .home-create .home-create-start { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
@@ -469,12 +469,12 @@ const css = `
     cursor: pointer;
   }
   .home-view-all:hover { text-decoration: underline; }
-  .home-panel { padding: 16px 18px; background: #161616; border-radius: 16px; }
+  .home-panel { padding: 16px 18px; background: var(--card); border-radius: 16px; }
   .home-panel-fill { flex: 1; display: flex; flex-direction: column; min-height: 260px; }
   /* The panel is already the box; a dashed border inside it reads as two. */
   .home-panel .empty-state { margin: auto 0; border: none; }
   .home-recordings { margin: 0; padding: 0; list-style: none; }
-  .home-recordings li + li { border-top: 1px solid #242424; }
+  .home-recordings li + li { border-top: 1px solid var(--line); }
   .home-recordings button {
     display: grid;
     grid-template-columns: 76px minmax(0, 1fr) auto;
@@ -485,12 +485,12 @@ const css = `
     border: none;
     border-radius: 10px;
     background: none;
-    color: #f0f0f0;
+    color: var(--text-strong);
     font: inherit;
     text-align: left;
     cursor: pointer;
   }
-  .home-recordings button:hover { background: #1e1e1e; }
+  .home-recordings button:hover { background: var(--card-hover); }
   .home-thumb {
     display: flex;
     align-items: center;
@@ -502,16 +502,16 @@ const css = `
   .home-thumb-play { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); }
   .home-rec-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
   .home-rec-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .home-rec-text span { color: #8a8a8a; font-size: 0.8rem; }
-  .home-rec-count { color: #8a8a8a; font-size: 0.85rem; white-space: nowrap; }
-  .home-empty { margin: auto 0; padding: 28px 8px; color: #8a8a8a; line-height: 1.6; text-align: center; }
+  .home-rec-text span { color: var(--text-dim); font-size: 0.8rem; }
+  .home-rec-count { color: var(--text-dim); font-size: 0.85rem; white-space: nowrap; }
+  .home-empty { margin: auto 0; padding: 28px 8px; color: var(--text-dim); line-height: 1.6; text-align: center; }
   .home-error {
     margin: 0;
     padding: 10px 14px;
-    border: 1px solid #5a2a2a;
+    border: 1px solid var(--error-line);
     border-radius: 8px;
-    background: #2a1a1a;
-    color: #ff8a80;
+    background: var(--error-bg);
+    color: var(--error-ink);
   }
 
   @media (max-width: 1080px) {

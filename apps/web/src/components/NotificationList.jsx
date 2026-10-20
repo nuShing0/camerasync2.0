@@ -60,7 +60,7 @@ function NotificationText({ notification: n }) {
 
 const css = `
   .notif-list { margin: 0; padding: 0; list-style: none; }
-  .notif-list li + li { border-top: 1px solid #242424; }
+  .notif-list li + li { border-top: 1px solid var(--panel); }
   .notif {
     display: grid;
     grid-template-columns: 10px minmax(0, 1fr) auto;
@@ -77,9 +77,9 @@ const css = `
     text-align: left;
     cursor: pointer;
   }
-  .notif:hover { background: #1e1e1e; }
+  .notif:hover { background: var(--card-hover); }
   .notif strong { font-weight: 600; }
-  .notif-unread { color: #f0f0f0; }
+  .notif-unread { color: var(--text-strong); }
   .notif-unread strong { font-weight: 700; }
   .notif-dot { width: 10px; height: 10px; margin-top: 5px; border-radius: 50%; }
   .notif-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; line-height: 1.4; }

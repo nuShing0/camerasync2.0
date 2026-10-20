@@ -53,7 +53,7 @@ export function GroupSettingsScreen() {
   }, [id]);
 
   if (loading) return <p style={{ color: "#999" }}>Loading group...</p>;
-  if (error) return <p role="alert" style={{ color: "#ff8a80" }}>{error}</p>;
+  if (error) return <p role="alert" style={{ color: "var(--error-ink)" }}>{error}</p>;
   if (!group) {
     return (
       <EmptyState title="Group not found" action="Back to Groups" to="/groups">
@@ -601,18 +601,18 @@ const css = `
   .gs-back { color: var(--accent); align-self: flex-start; }
   .gs-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: 22px 24px; border-radius: 12px; background: #242424; color: #f0f0f0;
+    padding: 22px 24px; border-radius: 12px; background: var(--panel); color: var(--text-strong);
   }
   .gs-banner h1 { margin: 0 0 6px; font-size: 1.8rem; overflow-wrap: anywhere; }
   .gs-banner p { margin: 0; opacity: 0.8; font-size: 0.9rem; }
-  .gs-card { padding: 18px 20px; border-radius: 14px; background: #151515; }
+  .gs-card { padding: 18px 20px; border-radius: 14px; background: var(--card); }
   .gs-card h2 { margin: 0 0 8px; font-size: 1.1rem; }
   .gs-card p { margin: 0 0 12px; color: #aaa; font-size: 0.9rem; line-height: 1.5; }
   .gs-button {
-    padding: 8px 14px; border: 1px solid #3a3a3a; border-radius: 7px;
-    background: #262626; color: #f0f0f0; font: inherit; font-weight: 600; cursor: pointer;
+    padding: 8px 14px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--field); color: var(--text-strong); font: inherit; font-weight: 600; cursor: pointer;
   }
-  .gs-button:hover { background: #303030; }
+  .gs-button:hover { background: var(--raised); }
   .gs-button:disabled { opacity: 0.5; cursor: default; }
   .gs-button-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
   .gs-button-primary:hover { background: var(--accent-hover); }
@@ -620,12 +620,12 @@ const css = `
   .gs-on-banner:hover { background: rgba(0,0,0,0.3); }
   .gs-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; }
   .gs-saved { color: #8bd48b; font-size: 0.85rem; }
-  .gs-error { color: #ff8a80 !important; }
+  .gs-error { color: var(--error-ink) !important; }
   .gs-form { display: flex; flex-direction: column; gap: 12px; }
   .gs-form label { display: flex; flex-direction: column; gap: 6px; color: #ddd; font-size: 0.85rem; font-weight: 600; }
   .gs-form input:not([type=checkbox]), .gs-inline select {
-    box-sizing: border-box; padding: 8px 10px; border: 1px solid #3a3a3a; border-radius: 7px;
-    background: #262626; color: #f0f0f0; font: inherit;
+    box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--field); color: var(--text-strong); font: inherit;
   }
   .gs-form .gs-check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
   .gs-check input { accent-color: var(--accent); width: 16px; height: 16px; }
@@ -633,12 +633,12 @@ const css = `
   .gs-inline select { flex: 1; min-width: 180px; }
   .gs-invite-link {
     flex: 1; min-width: 200px; box-sizing: border-box; padding: 8px 10px;
-    border: 1px solid #3a3a3a; border-radius: 7px; background: #262626;
-    color: #f0f0f0; font: inherit; font-size: 0.85rem;
+    border: 1px solid var(--line-strong); border-radius: 7px; background: var(--field);
+    color: var(--text-strong); font: inherit; font-size: 0.85rem;
   }
   .gs-spaced { margin-top: 18px !important; }
-  .gs-button-danger { border-color: #5a2a2a; background: #2a1414; color: #ff8a80; }
-  .gs-button-danger:hover { background: #3a1a1a; }
+  .gs-button-danger { border-color: var(--error-line); background: var(--error-bg); color: var(--error-ink); }
+  .gs-button-danger:hover { background: var(--error-bg); }
   .gs-members { list-style: none; margin: 0; padding: 0; }
   .gs-members li {
     display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
@@ -648,8 +648,8 @@ const css = `
   .gs-role { margin-left: 10px; color: #999; font-size: 0.8rem; }
   .gs-member-actions { display: flex; align-items: center; gap: 10px; }
   .gs-member-actions select {
-    padding: 5px 8px; border: 1px solid #3a3a3a; border-radius: 7px;
-    background: #262626; color: #f0f0f0; font: inherit; font-size: 0.85rem;
+    padding: 5px 8px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--field); color: var(--text-strong); font: inherit; font-size: 0.85rem;
   }
   /* A plain red line, drawn rather than typed so it sits dead center. */
   .gs-remove {
@@ -674,15 +674,15 @@ const css = `
   .gs-start { display: flex; flex-wrap: wrap; gap: 10px; }
   .gs-start input {
     flex: 1; min-width: 180px; box-sizing: border-box; padding: 8px 10px;
-    border: 1px solid #3a3a3a; border-radius: 7px; background: #262626; color: #f0f0f0; font: inherit;
+    border: 1px solid var(--line-strong); border-radius: 7px; background: var(--field); color: var(--text-strong); font: inherit;
   }
   .gs-recordings { margin: 0; padding: 0; list-style: none; }
   .gs-recordings li + li { border-top: 1px solid rgba(255,255,255,0.05); }
   .gs-recordings a {
     display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 14px;
-    padding: 9px 4px; border-radius: 9px; color: #f0f0f0; text-decoration: none;
+    padding: 9px 4px; border-radius: 9px; color: var(--text-strong); text-decoration: none;
   }
-  .gs-recordings a:hover { background: #1e1e1e; }
+  .gs-recordings a:hover { background: var(--card-hover); }
   .gs-thumb { display: flex; align-items: center; justify-content: center; height: 38px; border-radius: 7px; background: #0a0b0d; }
   .gs-thumb span { width: 15px; height: 15px; border-radius: 50%; background: var(--accent); }
   .gs-rec-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

@@ -294,12 +294,12 @@ function DeleteAccountSection() {
 }
 
 const css = `
-  .st-danger-card h2 { color: #ff8a80; }
+  .st-danger-card h2 { color: var(--error-ink); }
   .st-page .st-button-danger { border-color: #c0392b; background: #c0392b; color: #fff; }
   .st-page .st-button-danger:hover:not(:disabled) { background: #a93226; }
   .st-page { max-width: 640px; display: flex; flex-direction: column; gap: 16px; }
   .st-page h1 { margin: 0 0 4px; font-size: 1.8rem; }
-  .st-card { padding: 18px 20px; border-radius: 14px; background: #151515; }
+  .st-card { padding: 18px 20px; border-radius: 14px; background: var(--card); }
   .st-card h2 { margin: 0 0 10px; font-size: 1.1rem; }
   .st-card p { margin: 0 0 10px; color: #aaa; font-size: 0.9rem; line-height: 1.5; }
   .st-card p a { color: var(--accent); }
@@ -320,8 +320,8 @@ const css = `
   }
   .st-inline-form { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; }
   .st-inline-form input, .st-password-form input, .st-card select {
-    box-sizing: border-box; padding: 8px 10px; border: 1px solid #3a3a3a; border-radius: 7px;
-    background: #262626; color: #f0f0f0; font: inherit;
+    box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--field); color: var(--text-strong); font: inherit;
   }
   .st-inline-form input { flex: 1; min-width: 160px; }
   .st-card select { width: 100%; }
@@ -329,13 +329,13 @@ const css = `
   .st-password-form label { display: flex; flex-direction: column; gap: 6px; color: #ddd; font-size: 0.85rem; font-weight: 600; }
   .st-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
   .st-button {
-    padding: 8px 14px; border: 1px solid #3a3a3a; border-radius: 7px;
-    background: #262626; color: #f0f0f0; font: inherit; font-weight: 600; cursor: pointer;
+    padding: 8px 14px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--field); color: var(--text-strong); font: inherit; font-weight: 600; cursor: pointer;
   }
-  .st-button:hover { background: #303030; }
+  .st-button:hover { background: var(--raised); }
   .st-button:disabled { opacity: 0.5; cursor: default; }
   .st-button-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
   .st-button-primary:hover { background: var(--accent-hover); }
-  .st-error { color: #ff8a80 !important; }
+  .st-error { color: var(--error-ink) !important; }
   .st-success { color: #8bd48b !important; }
 `;

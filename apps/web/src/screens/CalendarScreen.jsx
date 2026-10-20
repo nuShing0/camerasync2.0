@@ -284,7 +284,7 @@ const styles = {
     fontWeight: 600,
     letterSpacing: "0.08em",
     textTransform: "uppercase",
-    color: "#8a8a8a",
+    color: "var(--text-dim)",
     padding: "0 0 10px 10px",
   },
   grid: {
@@ -293,8 +293,8 @@ const styles = {
     gap: 1,
     width: "100%",
     maxWidth: 1200,
-    background: "#262626",
-    border: "1px solid #262626",
+    background: "var(--field)",
+    border: "1px solid var(--field)",
     borderRadius: 10,
     overflow: "hidden",
   },
@@ -312,11 +312,11 @@ const css = `
     font-weight: 600;
     border-radius: 50%;
     border: none;
-    background: #1c1c1c;
-    color: #f0f0f0;
+    background: var(--card-hover);
+    color: var(--text-strong);
     cursor: pointer;
   }
-  .cal-nav:hover { background: #2a2a2a; }
+  .cal-nav:hover { background: var(--raised); }
   .cal-today {
     font: inherit;
     font-weight: 700;
@@ -340,8 +340,8 @@ const css = `
     min-height: 120px;
     padding: 10px;
     border: none;
-    background: #0d0d0d;
-    color: #e8e8e8;
+    background: var(--surface);
+    color: var(--page-ink);
     cursor: pointer;
     transition: background 0.12s;
   }
@@ -379,34 +379,34 @@ const css = `
     width: 100%;
     overflow: hidden;
     padding-left: 7px;
-    color: #777;
+    color: var(--text-dim);
     font-size: 0.72rem;
     text-align: left;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .cal-day:hover { background: #161616; }
-  .cal-day-muted { color: #4a4a4a; }
+  .cal-day:hover { background: var(--card); }
+  .cal-day-muted { color: var(--line-strong); }
   .cal-day-today .cal-day-number {
     background: var(--accent);
     color: var(--accent-ink);
     font-weight: 700;
   }
   .cal-day-selected {
-    background: #191919;
+    background: var(--card);
     box-shadow: inset 0 0 0 1.5px var(--accent);
   }
   .cal-error {
     margin: 0 0 12px;
-    color: #ff8a80;
+    color: var(--error-ink);
   }
   .cal-agenda {
     max-width: 940px;
     margin-top: 20px;
     padding: 18px;
-    border: 1px solid #2a2a2a;
+    border: 1px solid var(--raised);
     border-radius: 9px;
-    background: #1c1c1c;
+    background: var(--card-hover);
   }
   .cal-agenda h2 {
     margin: 0 0 12px;
@@ -414,7 +414,7 @@ const css = `
   }
   .cal-agenda p {
     margin: 0;
-    color: #999;
+    color: var(--text-muted);
   }
   .cal-agenda-list {
     display: flex;
@@ -434,7 +434,7 @@ const css = `
     border-top: 0;
   }
   .cal-agenda-item time {
-    color: #aaa;
+    color: var(--text-muted);
     font-size: 0.85rem;
   }
   .cal-agenda-item span {

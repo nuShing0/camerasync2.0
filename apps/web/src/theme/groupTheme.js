@@ -3,15 +3,19 @@
 //
 //   --brand / --brand-ink       sidebar fill and the text on it
 //   --brand-active              the sidebar's selected-item tile
-//   --accent / --accent-ink     buttons, links and highlights on the black
-//                               page, and the text on an accent fill
+//   --accent / --accent-ink     buttons, links and highlights on the page,
+//                               and the text on an accent fill
 //   --accent-hover              hover state for accent fills
+//   --page-bg / --page-ink      page background and text (light/dark mode)
+//   --surface / --surface-2     card and panel backgrounds (light/dark mode)
 //
 // The sidebar shows the team color exactly as chosen, but --accent is
-// lightened until it is readable on the black page: a navy primary makes a
-// good sidebar and an unreadable link.
+// shifted until it is readable on the page: lightened on the black page,
+// darkened on the white page. A navy primary makes a good sidebar and an
+// unreadable link.
 
 const PAGE_BACKGROUND = "#000000";
+const LIGHT_PAGE_BACKGROUND = "#ffffff";
 // WCAG AA for normal text — accents are used for links and timestamps too.
 const MIN_ACCENT_CONTRAST = 4.5;
 
@@ -23,6 +27,65 @@ export const DEFAULT_THEME = {
   "--accent": "#ead217",
   "--accent-ink": "#0d0d0d",
   "--accent-hover": "#f0df5d",
+};
+
+/// Page surfaces for each appearance mode.
+/*export const SURFACES = {
+  dark: {
+    "--page-bg": "#000000",
+    "--page-ink": "#e8e8e8",
+    "--surface": "#0d0d0d",
+    "--surface-2": "#111111",
+  },
+  light: {
+    "--page-bg": "#ffffff",
+    "--page-ink": "#111111",
+    "--surface": "#f4f4f5",
+    "--surface-2": "#ececee",
+  },
+};*/
+
+export const SURFACES = {
+  dark: {
+    "--page-bg": "#000000",
+    "--page-ink": "#e8e8e8",
+    "--surface": "#0d0d0d",
+    "--surface-2": "#111111",
+    "--card": "#161616",
+    "--card-hover": "#1c1c1c",
+    "--raised": "#292929",
+    "--field": "#262626",
+    "--panel": "#242424",
+    "--text-strong": "#f0f0f0",
+    "--text-soft": "#d0d0d0",
+    "--text-muted": "#a0a0a0",
+    "--text-dim": "#8a8a8a",
+    "--line": "#242424",
+    "--line-strong": "#444444",
+    "--error-bg": "#2a1a1a",
+    "--error-line": "#5a2a2a",
+    "--error-ink": "#ff8a80",
+  },
+  light: {
+    "--page-bg": "#ffffff",
+    "--page-ink": "#111111",
+    "--surface": "#f4f4f5",
+    "--surface-2": "#ececee",
+    "--card": "#f4f4f5",
+    "--card-hover": "#ebebed",
+    "--raised": "#e4e4e7",
+    "--field": "#ffffff",
+    "--panel": "#ececee",
+    "--text-strong": "#111111",
+    "--text-soft": "#3f3f46",
+    "--text-muted": "#52525b",
+    "--text-dim": "#6b6b73",
+    "--line": "#e4e4e7",
+    "--line-strong": "#c4c4cc",
+    "--error-bg": "#fdecea",
+    "--error-line": "#f0b4ad",
+    "--error-ink": "#a01c0e",
+  },
 };
 
 const HEX = /^#([0-9a-f]{6})$/i;
@@ -65,11 +128,29 @@ export function lighten(color, amount) {
   return hex(rgb(color).map((v) => v + (255 - v) * amount));
 }
 
+/// Blend `color` toward black by `amount` (0–1).
+export function darken(color, amount) {
+  return hex(rgb(color).map((v) => v * (1 - amount)));
+}
+
 /// `color` lightened just enough to be readable on the black page.
 export function legibleOnDark(color) {
   let candidate = color;
   for (let step = 1; contrast(candidate, PAGE_BACKGROUND) < MIN_ACCENT_CONTRAST; step++) {
     candidate = lighten(color, step / 10);
+  }
+  return candidate;
+}
+
+/// `color` darkened just enough to be readable on the white page.
+export function legibleOnLight(color) {
+  let candidate = color;
+  for (
+    let step = 1;
+    step <= 10 && contrast(candidate, LIGHT_PAGE_BACKGROUND) < MIN_ACCENT_CONTRAST;
+    step++
+  ) {
+    candidate = darken(color, step / 10);
   }
   return candidate;
 }
@@ -82,9 +163,26 @@ export function groupAccent(group) {
     : DEFAULT_THEME["--accent"];
 }
 
+/// Light-mode variables: the accent is darkened to read on the white page.
+function lightThemeFor(group) {
+  const primary = group?.primaryColor;
+  const base = rgb(primary) ? primary : DEFAULT_THEME["--brand"];
+  const accent = legibleOnLight(base);
+  return {
+    "--brand": base,
+    "--brand-ink": inkFor(base),
+    "--brand-active": lighten(base, 0.45),
+    "--accent": accent,
+    "--accent-ink": inkFor(accent),
+    "--accent-hover": darken(accent, 0.2),
+  };
+}
+
 /// The CSS variables for a group, or 8kount branding when there is none or
-/// its colors are unusable.
-export function themeFor(group) {
+/// its colors are unusable. `mode` is "dark" (default) or "light".
+export function themeFor(group, mode = "dark") {
+  if (mode === "light") return lightThemeFor(group);
+
   const primary = group?.primaryColor;
   if (!rgb(primary)) return DEFAULT_THEME;
 

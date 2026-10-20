@@ -498,7 +498,7 @@ const groupsCss = `
   .groups-grid { max-width: 760px; margin-top: 24px; }
   .group-panel {
     padding: 22px;
-    background: #151515;
+    background: var(--card);
     border-radius: 14px;
   }
   .group-panel h2 {
@@ -510,13 +510,13 @@ const groupsCss = `
     padding: 10px 18px;
     border: none;
     border-radius: 12px;
-    background: #1c1c1c;
-    color: #f0f0f0;
+    background: var(--card-hover);
+    color: var(--text-strong);
     font: inherit;
     font-weight: 700;
     cursor: pointer;
   }
-  .group-tool-button:hover { background: #262626; }
+  .group-tool-button:hover { background: var(--field); }
   .group-tool-primary { background: var(--accent); color: var(--accent-ink); }
   .group-tool-primary:hover { background: var(--accent-hover); }
   .group-modal-backdrop {
@@ -527,7 +527,7 @@ const groupsCss = `
   .group-modal {
     box-sizing: border-box; width: min(440px, 100%); max-height: calc(100vh - 32px);
     overflow: auto; padding: 18px 22px 22px; border-radius: 16px;
-    background: #1a1a1a; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    background: var(--card); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
   }
   .group-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .group-modal-header h2 { margin: 0; font-size: 1.2rem; }
@@ -536,14 +536,14 @@ const groupsCss = `
     width: 34px; height: 34px; padding: 0; border: none; border-radius: 8px;
     background: transparent; color: #aaa; cursor: pointer;
   }
-  .group-modal-close:hover { background: #262626; color: #fff; }
+  .group-modal-close:hover { background: var(--field); color: var(--text-strong); }
   .group-tool-content {
     margin-top: 10px;
   }
   .group-empty {
     margin: 0;
     padding: 28px 16px;
-    border: 1px dashed #3a3a3a;
+    border: 1px dashed var(--line-strong);
     border-radius: 8px;
     color: #888;
     text-align: center;
@@ -560,7 +560,7 @@ const groupsCss = `
     padding: 11px 14px;
     border: none;
     border-radius: 12px;
-    background: #1c1c1c;
+    background: var(--card-hover);
     font-weight: 600;
   }
   .group-tile-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
@@ -571,7 +571,7 @@ const groupsCss = `
   }
   .group-row-link {
     width: 100%;
-    color: #f0f0f0;
+    color: var(--text-strong);
     font: inherit;
     font-weight: 600;
     text-align: left;
@@ -603,10 +603,10 @@ const groupsCss = `
   .group-error {
     margin: 0 0 14px;
     padding: 9px 11px;
-    border: 1px solid #5a2a2a;
+    border: 1px solid var(--error-line);
     border-radius: 7px;
-    background: #2a1a1a;
-    color: #ff8a80;
+    background: var(--error-bg);
+    color: var(--error-ink);
     font-size: 0.85rem;
   }
   .group-field {
@@ -624,19 +624,19 @@ const groupsCss = `
     box-sizing: border-box;
     width: 100%;
     padding: 10px 11px;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--line-strong);
     border-radius: 7px;
     outline: none;
-    background: #262626;
-    color: #f0f0f0;
+    background: var(--field);
+    color: var(--text-strong);
     font: inherit;
   }
   .group-field input:focus {
     border-color: var(--accent);
   }
   .group-field input:disabled {
-    border-color: #303030;
-    background: #202020;
+    border-color: var(--raised);
+    background: var(--field);
     color: #666;
     cursor: not-allowed;
     opacity: 0.7;
@@ -693,7 +693,7 @@ const groupsCss = `
   .group-search-message {
     margin: 4px 0 0;
     padding: 18px 10px;
-    border: 1px dashed #3a3a3a;
+    border: 1px dashed var(--line-strong);
     border-radius: 7px;
     color: #888;
     text-align: center;
@@ -705,9 +705,9 @@ const groupsCss = `
   }
   .group-search-result {
     padding: 11px;
-    border: 1px solid #303030;
+    border: 1px solid var(--raised);
     border-radius: 8px;
-    background: #242424;
+    background: var(--panel);
   }
   .group-search-row {
     display: flex;
@@ -758,16 +758,16 @@ const groupsCss = `
   }
   .group-button {
     padding: 9px 14px;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--line-strong);
     border-radius: 7px;
-    background: #262626;
-    color: #f0f0f0;
+    background: var(--field);
+    color: var(--text-strong);
     font: inherit;
     font-weight: 600;
     cursor: pointer;
   }
   .group-button:hover {
-    background: #303030;
+    background: var(--raised);
   }
   .group-button-primary {
     border-color: var(--accent);

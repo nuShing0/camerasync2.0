@@ -24,8 +24,10 @@ export function AppLayout() {
 const styles = {
   shell: {
     minHeight: "100vh",
-    background: "#000",
-    color: "#f0f0f0",
+    //background: "#000", //original, appearance toggle below
+    background: "var(--page-bg)",
+    color: "var(--page-ink)",
+    color: "var(--page-ink)",
     fontFamily: "system-ui, sans-serif",
   },
   content: {

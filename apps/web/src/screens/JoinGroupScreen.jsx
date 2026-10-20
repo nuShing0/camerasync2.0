@@ -88,16 +88,16 @@ export function JoinGroupScreen() {
 
 const css = `
   .jg-page { display: flex; justify-content: center; padding-top: 6vh; }
-  .jg-card { width: min(420px, 100%); border-radius: 16px; overflow: hidden; background: #151515; }
-  .jg-banner { padding: 22px 22px 20px; background: #242424; color: #f0f0f0; }
+  .jg-card { width: min(420px, 100%); border-radius: 16px; overflow: hidden; background: var(--card); }
+  .jg-banner { padding: 22px 22px 20px; background: var(--panel); color: var(--text-strong); }
   .jg-banner span { font-size: 0.85rem; opacity: 0.8; }
   .jg-banner h1 { margin: 4px 0 0; font-size: 1.7rem; overflow-wrap: anywhere; }
   .jg-body { display: flex; flex-direction: column; gap: 14px; padding: 20px 22px 22px; }
   .jg-body p { margin: 0; color: #aaa; }
   .jg-body label { display: flex; flex-direction: column; gap: 6px; color: #ddd; font-size: 0.85rem; font-weight: 600; }
   .jg-body input {
-    box-sizing: border-box; padding: 10px 11px; border: 1px solid #3a3a3a; border-radius: 7px;
-    background: #262626; color: #f0f0f0; font: inherit;
+    box-sizing: border-box; padding: 10px 11px; border: 1px solid var(--line-strong); border-radius: 7px;
+    background: var(--field); color: var(--text-strong); font: inherit;
   }
   .jg-button {
     display: block; padding: 12px 16px; border: none; border-radius: 10px; text-align: center;
@@ -105,5 +105,5 @@ const css = `
     text-decoration: none; cursor: pointer;
   }
   .jg-button:disabled { opacity: 0.6; cursor: default; }
-  .jg-error { color: #ff8a80 !important; }
+  .jg-error { color: var(--error-ink) !important; }
 `;

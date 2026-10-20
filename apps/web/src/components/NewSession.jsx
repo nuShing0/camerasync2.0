@@ -80,7 +80,7 @@ const css = `
   /* The dialog sits outside the app shell, so it sets the app's font itself. */
   .new-session-dialog {
     width: min(520px, calc(100vw - 32px)); padding: 0; border: 1px solid #333;
-    border-radius: 16px; background: #161616; color: #f0f0f0;
+    border-radius: 16px; background: var(--card); color: var(--text-strong);
     font-family: system-ui, sans-serif;
   }
   .new-session-dialog input, .new-session-dialog select, .new-session-dialog button { font-family: inherit; }
@@ -98,12 +98,12 @@ const css = `
     width: 32px; height: 32px; border: none; border-radius: 50%;
     background: transparent; color: #ccc; font-size: 1.3rem; cursor: pointer;
   }
-  .new-session-icon:hover { background: #262626; color: #fff; }
+  .new-session-icon:hover { background: var(--field); color: var(--text-strong); }
   .new-session-choices { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
   .new-session-choices button {
     width: 100%; display: flex; flex-direction: column; gap: 3px; text-align: left;
     padding: 14px 16px; border: 1px solid #333; border-radius: 12px;
-    background: #1f1f1f; color: #f0f0f0; font: inherit; cursor: pointer;
+    background: var(--field); color: var(--text-strong); font: inherit; cursor: pointer;
   }
   .new-session-choices button:hover, .new-session-choices button:focus-visible { border-color: var(--accent); }
   .new-session-choices strong { font-size: 1rem; }
