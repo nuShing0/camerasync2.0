@@ -30,14 +30,14 @@ const css = `
     align-items: center;
     gap: 8px;
     padding: 28px 16px;
-    border: 1px dashed #3a3a3a;
+    border: 1px dashed var(--line-strong);
     border-radius: 12px;
-    color: #8a8a8a;
+    color: var(--text-dim);
     text-align: center;
   }
   .empty-state-compact { padding: 18px 12px; gap: 6px; }
   .empty-state-title {
-    color: #e0e0e0;
+    color: var(--text-strong);
     font-size: 1.05rem;
     font-weight: 700;
   }

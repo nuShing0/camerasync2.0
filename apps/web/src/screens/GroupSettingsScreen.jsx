@@ -687,8 +687,8 @@ const css = `
   .gs-thumb span { width: 15px; height: 15px; border-radius: 50%; background: var(--accent); }
   .gs-rec-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .gs-rec-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .gs-rec-text span { color: #8a8a8a; font-size: 0.8rem; }
-  .gs-rec-count { color: #8a8a8a; font-size: 0.85rem; white-space: nowrap; }
+  .gs-rec-text span { color: var(--text-dim); font-size: 0.8rem; }
+  .gs-rec-count { color: var(--text-dim); font-size: 0.85rem; white-space: nowrap; }
   .gs-pages { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; font-size: 0.85rem; }
   @media (max-width: 600px) {
     .gs-banner { flex-direction: column; align-items: flex-start; }

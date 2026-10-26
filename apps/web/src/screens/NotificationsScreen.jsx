@@ -43,7 +43,7 @@ export function NotificationsScreen() {
 const css = `
   .nt-page { max-width: 720px; display: flex; flex-direction: column; gap: 12px; }
   .nt-page h1 { margin: 0; font-size: 1.8rem; }
-  .nt-sub { margin: 0 0 8px; color: #a0a0a0; }
+  .nt-sub { margin: 0 0 8px; color: var(--text-muted); }
   .nt-card { padding: 10px 14px; border-radius: 14px; background: var(--card); }
-  .nt-empty { margin: 0; padding: 28px 8px; color: #8a8a8a; text-align: center; }
+  .nt-empty { margin: 0; padding: 28px 8px; color: var(--text-dim); text-align: center; }
 `;

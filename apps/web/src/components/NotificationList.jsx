@@ -71,7 +71,7 @@ const css = `
     border: none;
     border-radius: 10px;
     background: none;
-    color: #a0a0a0;
+    color: var(--text-muted);
     font: inherit;
     font-size: 0.9rem;
     text-align: left;
@@ -85,7 +85,7 @@ const css = `
   .notif-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; line-height: 1.4; }
   .notif-quote {
     overflow: hidden;
-    color: #8a8a8a;
+    color: var(--text-dim);
     font-size: 0.82rem;
     text-overflow: ellipsis;
     white-space: nowrap;
