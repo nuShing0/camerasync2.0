@@ -13,11 +13,13 @@ import 'package:camerasync_mobile/screens/settings_tab.dart';
 import 'package:camerasync_mobile/screens/watch_screen.dart';
 import 'package:camerasync_mobile/team_accent.dart';
 
-/// Settings tab and live group search, against a small local server like
-/// recordings_screen_test.dart.
+/// Settings tab and joining a group with an invite, against a small local
+/// server like recordings_screen_test.dart.
 void main() {
   late HttpServer server;
-  late List<String> searches;
+  late List<String> inviteLookups;
+  late List<String> joins;
+  late List<Map<String, dynamic>> requests;
   late List<Map<String, dynamic>> patches;
   late List<String> resetEmails;
   late List<String> passwordFlowCalls;
@@ -26,7 +28,9 @@ void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     HttpOverrides.global = null;
-    searches = [];
+    inviteLookups = [];
+    joins = [];
+    requests = [];
     patches = [];
     resetEmails = [];
     passwordFlowCalls = [];
@@ -67,32 +71,70 @@ void main() {
           await utf8.decoder.bind(req).join();
         }
         body = null;
-      } else if (path == '/api/groups/search') {
-        searches.add(req.uri.queryParameters['q'] ?? '');
+      } else if (path == '/api/groups/invites/STUNT5' && req.method == 'GET') {
+        inviteLookups.add(path);
         body = {
-          'groups': [
-            {
-              'id': 'ucfcheer',
-              'name': 'UCF Cheer',
-              'isPublic': true,
-              'isMember': false
-            },
-          ],
+          'group': {
+            'id': 'ucfstunt',
+            'name': 'UCF Stunt',
+            'primaryColor': '#16a34a',
+            'memberCount': 12,
+            'isMember': false,
+          },
         };
+      } else if (path == '/api/groups/invites/STUNT5/join') {
+        joins.add(path);
+        req.response.statusCode = 201;
+        body = {
+          'group': {
+            'id': 'ucfstunt',
+            'name': 'UCF Stunt',
+            'primaryColor': '#16a34a',
+            'owner': 9,
+            'role': 'member',
+          },
+        };
+      } else if (path == '/api/groups/invites/CHEER1') {
+        body = {
+          'group': {
+            'id': 'ucfcheer',
+            'name': 'UCF Cheer',
+            'primaryColor': '#ead217',
+            'memberCount': 30,
+            'isMember': true,
+          },
+        };
+      } else if (path.startsWith('/api/groups/invites/')) {
+        req.response.statusCode = 404;
+        body = {
+          'error':
+              'No group has that invite. Check the code, or ask for a new link.'
+        };
+      } else if (path == '/api/groups/requests') {
+        requests.add(jsonDecode(await utf8.decoder.bind(req).join())
+            as Map<String, dynamic>);
+        req.response.statusCode = 201;
+        body = {
+          'status': 'requested',
+          'group': {'id': 'UCFCheer', 'name': 'UCF Cheer'},
+        };
+      } else if (path.endsWith('/members') ||
+          path.endsWith('/requests')) {
+        body = {'members': [], 'requests': []};
+      } else if (path == '/api/recordings/sessions') {
+        body = {'sessions': []};
       } else if (path == '/api/groups') {
         body = {
           'groups': [
             {
               'id': 'ucfcheer',
               'name': 'UCF Cheer',
-              'isPublic': true,
               'primaryColor': '#ead217',
               'joinedAt': '2026-09-01T00:00:00Z'
             },
             {
               'id': 'ucfdance',
               'name': 'UCF Dance Team',
-              'isPublic': true,
               'primaryColor': '#7c3aed',
               'joinedAt': '2026-09-02T00:00:00Z'
             },
@@ -126,8 +168,11 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   }
 
-  testWidgets('group search runs as you type, with no Search button',
-      (tester) async {
+  Finder inviteField() => find.widgetWithText(TextField, 'Enter a code or paste a link');
+
+  Future<void> openGroups(WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1080, 4000);
+    addTearDown(tester.view.resetPhysicalSize);
     late AuthService auth;
     await tester.runAsync(() async {
       auth = await signedIn();
@@ -135,18 +180,97 @@ void main() {
           MaterialApp(home: Scaffold(body: GroupsScreen(auth: auth))));
     });
     await settle(tester);
+  }
 
-    expect(find.widgetWithText(FilledButton, 'Search'), findsNothing);
+  testWidgets('a pasted invite link shows the group, and Join joins it',
+      (tester) async {
+    await openGroups(tester);
+
+    // No search any more: the one field takes a code or a link.
+    expect(find.text('Find a group by ID'), findsNothing);
+    expect(find.text('Scan QR'), findsOneWidget);
 
     await tester.runAsync(() async {
-      await tester.enterText(find.byType(TextField), 'ucf');
-      // Past the 300 ms pause after the last keystroke.
-      await Future<void>.delayed(const Duration(milliseconds: 700));
+      await tester.enterText(
+          inviteField(), 'Join us! https://8kount.app/join/stunt5?ref=text');
+      // Built on the real clock, so the preview's request can run.
+      await tester.pump();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
     });
     await settle(tester);
 
-    expect(searches, ['ucf']);
-    expect(find.text('ucfcheer'), findsOneWidget);
+    expect(inviteLookups, ['/api/groups/invites/STUNT5']);
+    expect(find.text('UCF Stunt'), findsOneWidget);
+    expect(find.text('12 members'), findsOneWidget);
+
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(FilledButton, 'Join UCF Stunt'));
+      await Future<void>.delayed(const Duration(milliseconds: 600));
+    });
+    await settle(tester);
+
+    expect(joins, ['/api/groups/invites/STUNT5/join']);
+    // Then the new group's page opens; its requests run on the real clock.
+    for (var i = 0; i < 3; i++) {
+      await tester.runAsync(() async {
+        await tester.pump(const Duration(milliseconds: 150));
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      });
+    }
+    await settle(tester);
+    expect(find.text('Group'), findsOneWidget);
+  });
+
+  testWidgets('a code for a group you are in offers to open it',
+      (tester) async {
+    await openGroups(tester);
+
+    await tester.runAsync(() async {
+      await tester.enterText(inviteField(), 'che-er1');
+      // Built on the real clock, so the preview's request can run.
+      await tester.pump();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    await settle(tester);
+
+    expect(find.text("You're already in this group."), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, 'Open group'), findsOneWidget);
+  });
+
+  testWidgets('an unknown code shows the server message', (tester) async {
+    await openGroups(tester);
+
+    await tester.runAsync(() async {
+      await tester.enterText(inviteField(), 'ZZZ-ZZZ');
+      // Built on the real clock, so the preview's request can run.
+      await tester.pump();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    await settle(tester);
+
+    expect(find.textContaining('No group has that invite'), findsOneWidget);
+  });
+
+  testWidgets('asking to join by ID sends a request', (tester) async {
+    await openGroups(tester);
+
+    await tester.tap(find.textContaining('Ask to join', findRichText: true));
+    await tester.pump();
+    await tester.runAsync(() async {
+      await tester.enterText(
+          find.widgetWithText(TextField, 'Group ID'), 'ucfcheer');
+      await tester.tap(find.widgetWithText(FilledButton, 'Ask'));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    await settle(tester);
+
+    expect(requests, [
+      {'groupId': 'ucfcheer'},
+    ]);
+    expect(
+        find.text(
+            "Request sent to UCF Cheer. You'll be in once an admin approves."),
+        findsOneWidget);
   });
 
   testWidgets('settings saves the primary group to the account',
@@ -277,8 +401,8 @@ void main() {
 
   test('primary group: the saved one, else the first joined', () {
     final groups = [
-      Group(id: 'b', name: 'B', isPublic: true, joinedAt: DateTime(2026, 9, 2)),
-      Group(id: 'a', name: 'A', isPublic: true, joinedAt: DateTime(2026, 9, 1)),
+      Group(id: 'b', name: 'B', joinedAt: DateTime(2026, 9, 2)),
+      Group(id: 'a', name: 'A', joinedAt: DateTime(2026, 9, 1)),
     ];
     const user = AppUser(id: 1, email: 'x@ucf.edu');
     expect(primaryGroupOf(user, groups)?.id, 'a');

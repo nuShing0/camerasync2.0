@@ -16,22 +16,26 @@ void main() {
   late HttpServer server;
   late List<Map<String, dynamic>> colorPatches;
   late List<String> leaves;
+  late List<String> answered;
+  late List<String> resets;
 
   const cheerAsOwner = Group(
     id: 'ucfcheer',
     name: 'UCF Cheer',
-    isPublic: true,
     primaryColor: '#ead217',
     owner: 1,
     role: 'admin',
+    inviteCode: 'K7Q2MX',
+    inviteUrl: 'https://8kount.app/join/K7Q2MX',
   );
   const danceAsMember = Group(
     id: 'ucfdance',
     name: 'UCF Dance Team',
-    isPublic: true,
     primaryColor: '#7c3aed',
     owner: 2,
     role: 'member',
+    inviteCode: 'D4NC3R',
+    inviteUrl: 'https://8kount.app/join/D4NC3R',
   );
 
   setUp(() async {
@@ -39,6 +43,8 @@ void main() {
     HttpOverrides.global = null;
     colorPatches = [];
     leaves = [];
+    answered = [];
+    resets = [];
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((req) async {
       final path = req.uri.path;
@@ -55,6 +61,35 @@ void main() {
       } else if (path.endsWith('/leave') && req.method == 'POST') {
         leaves.add(path);
         body = {'ok': true};
+      } else if (path == '/api/groups/ucfcheer/requests') {
+        body = {
+          'requests': [
+            {
+              'userId': 7,
+              'name': 'Jordan Lee',
+              'email': 'jordan@ucf.edu',
+              'requestedAt': DateTime.now()
+                  .subtract(const Duration(minutes: 5))
+                  .toIso8601String(),
+            },
+          ],
+        };
+      } else if (path.startsWith('/api/groups/ucfcheer/requests/')) {
+        answered.add('${req.method} $path');
+        body = {'ok': true};
+      } else if (path == '/api/groups/ucfcheer/invite/reset') {
+        resets.add(path);
+        body = {
+          'group': {
+            'id': 'ucfcheer',
+            'name': 'UCF Cheer',
+            'primaryColor': '#ead217',
+            'owner': 1,
+            'role': 'admin',
+            'inviteCode': 'NEW234',
+            'inviteUrl': 'https://8kount.app/join/NEW234',
+          },
+        };
       } else if (path.endsWith('/members')) {
         body = {
           'members': [
@@ -70,10 +105,11 @@ void main() {
           'group': {
             'id': 'ucfcheer',
             'name': 'UCF Cheer',
-            'isPublic': true,
             'primaryColor': sent['primaryColor'],
             'owner': 1,
             'role': 'admin',
+            'inviteCode': 'K7Q2MX',
+            'inviteUrl': 'https://8kount.app/join/K7Q2MX',
           },
         };
       } else if (path == '/api/recordings/sessions') {
@@ -93,8 +129,7 @@ void main() {
             {
               'id': 'ucfcheer',
               'name': 'UCF Cheer',
-              'isPublic': true,
-              'primaryColor': '#ead217',
+                'primaryColor': '#ead217',
               'owner': 1,
               'role': 'admin'
             },
@@ -140,7 +175,7 @@ void main() {
 
   testWidgets('admins and owners can change the team color', (tester) async {
     // Tall enough that the list builds every section.
-    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.physicalSize = const Size(800, 3600);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await open(tester, cheerAsOwner);
@@ -261,5 +296,82 @@ void main() {
 
     expect(find.text('Start a session'), findsNothing);
     expect(find.textContaining('An admin starts sessions'), findsOneWidget);
+  });
+
+  testWidgets('everyone in the group sees the invite; only admins can reset it',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 3600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await open(tester, danceAsMember);
+
+    expect(find.text('Invite people'), findsOneWidget);
+    expect(find.text('D4N-C3R'), findsOneWidget);
+    expect(find.text('Share'), findsOneWidget);
+    expect(find.text('Copy link'), findsOneWidget);
+    expect(find.text('Show QR'), findsOneWidget);
+    expect(find.text('Reset invite'), findsNothing);
+    // No privacy left anywhere: the banner is just the ID and your role.
+    expect(find.textContaining('Private'), findsNothing);
+    expect(find.textContaining('Public'), findsNothing);
+  });
+
+  testWidgets('an admin resets the invite after confirming', (tester) async {
+    tester.view.physicalSize = const Size(800, 3600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await open(tester, cheerAsOwner);
+
+    expect(find.text('K7Q-2MX'), findsOneWidget);
+    // Started on the real clock, so the request after the dialog can run.
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Reset invite'));
+    });
+    await tester.pumpAndSettle();
+    expect(find.textContaining('The old link, code and QR stop working'),
+        findsOneWidget);
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(FilledButton, 'Reset'));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    await settle(tester);
+
+    expect(resets, ['/api/groups/ucfcheer/invite/reset']);
+    expect(find.text('NEW-234'), findsOneWidget);
+  });
+
+  testWidgets('admins see requests to join and can approve them',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 3600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await open(tester, cheerAsOwner);
+
+    expect(find.text('Requests to join (1)'), findsOneWidget);
+    expect(find.text('Jordan Lee'), findsOneWidget);
+    expect(find.text('Asked 5m ago'), findsOneWidget);
+
+    await tester.runAsync(() async {
+      await tester.tap(find.widgetWithText(FilledButton, 'Approve'));
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    // The roster loads again with them in it, on the real clock.
+    await tester.runAsync(() async {
+      await tester.pump();
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+    });
+    await settle(tester);
+    expect(answered, ['POST /api/groups/ucfcheer/requests/7/approve']);
+    // The last one answered, so the section goes away.
+    expect(find.text('Requests to join (1)'), findsNothing);
+  });
+
+  testWidgets('members never see requests to join', (tester) async {
+    tester.view.physicalSize = const Size(800, 3600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await open(tester, danceAsMember);
+
+    expect(find.textContaining('Requests to join'), findsNothing);
   });
 }

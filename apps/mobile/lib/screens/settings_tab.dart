@@ -180,7 +180,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       color: Colors.white, fontWeight: FontWeight.w700)),
               const SizedBox(height: 6),
               const Text(
-                'Record practices from several phones at once, then review every angle '
+                'Record sessions from several phones at once, then review every angle '
                 'together with timestamped comments. Built by a UCF senior design team.',
                 style: TextStyle(color: kMuted, height: 1.4),
               ),
@@ -245,7 +245,7 @@ class _NotificationsCardState extends State<_NotificationsCard> {
   static const _kinds = [
     ('comments', 'Comments on recordings'),
     ('joins', 'People joining your groups'),
-    ('sessions', 'Practices starting'),
+    ('sessions', 'Sessions starting'),
   ];
 
   Future<void> _set(String key, bool on) async {

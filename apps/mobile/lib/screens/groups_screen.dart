@@ -6,17 +6,27 @@ import 'package:flutter/services.dart';
 
 import '../api/groups_api.dart';
 import '../auth/auth_service.dart';
+import '../groups/invite_code.dart';
 import '../team_accent.dart';
 import '../theme.dart';
 import '../widgets/create_group_dialog.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/invite_panel.dart';
+import '../widgets/invite_preview.dart';
 import 'group_settings_screen.dart';
+import 'scan_invite_screen.dart';
 
-/// Lists the user's groups and lets them open a group's sessions.
+/// Lists the user's groups and lets them open a group's sessions. Groups
+/// are joined with an invite (a code, link or QR from someone in it), or by
+/// asking to join with the group's ID for an admin to approve.
 class GroupsScreen extends StatefulWidget {
-  const GroupsScreen({super.key, required this.auth});
+  const GroupsScreen({super.key, required this.auth, this.refresh});
 
   final AuthService auth;
+
+  /// Ticks when a group was joined somewhere else, like from an invite
+  /// link, so the list reloads.
+  final Listenable? refresh;
 
   @override
   State<GroupsScreen> createState() => _GroupsScreenState();
@@ -28,26 +38,32 @@ class _GroupsScreenState extends State<GroupsScreen> {
   List<Group> _groups = [];
   bool _loading = true;
   String? _error;
-  final TextEditingController _searchController = TextEditingController();
-  List<Group> _searchResults = [];
-  bool _searching = false;
-  String? _searchError;
-  Timer? _searchDebounce;
 
-  /// Search waits this long after the last keystroke, so typing a whole ID
-  /// sends one request instead of one per letter.
-  static const _searchDelay = Duration(milliseconds: 300);
+  /// The invite field: a code or a pasted link. [_inviteCode] is the code
+  /// in it once there is one, and its preview shows below.
+  final _invite = TextEditingController();
+  String? _inviteCode;
+  String? _inviteHint;
+
+  /// Asking to join by the group's exact ID, the way in without an invite.
+  final _requestId = TextEditingController();
+  bool _asking = false;
+  bool _requesting = false;
+  String? _requestMessage;
+  bool _requestFailed = false;
 
   @override
   void initState() {
     super.initState();
     _loadGroups();
+    widget.refresh?.addListener(_loadGroups);
   }
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
-    _searchController.dispose();
+    widget.refresh?.removeListener(_loadGroups);
+    _invite.dispose();
+    _requestId.dispose();
     super.dispose();
   }
 
@@ -73,97 +89,82 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
-  void _onSearchChanged(String text) {
-    setState(() {}); // shows or hides the clear button
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(_searchDelay, () => _searchGroups(text));
-  }
-
-  Future<void> _searchGroups(String query) async {
-    final q = query.trim();
-    if (q.isEmpty) {
-      setState(() {
-        _searchResults = [];
-        _searchError = null;
-        _searching = false;
-      });
-      return;
-    }
-
+  /// The preview shows as soon as the field holds a whole code or link.
+  void _onInviteChanged(String text) {
     setState(() {
-      _searching = true;
-      _searchError = null;
+      _inviteCode = inviteCodeFrom(text);
+      _inviteHint = null;
     });
+  }
 
-    try {
-      final results = await _groupsApi.searchGroups(q);
-      // A slower reply for an older query must not replace newer results.
-      if (!mounted || q != _searchController.text.trim()) return;
-      setState(() {
-        _searchResults = results;
-        _searching = false;
-      });
-    } on ApiException catch (e) {
-      if (!mounted || q != _searchController.text.trim()) return;
-      setState(() {
-        _searchError = e.message;
-        _searching = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _searchError = 'Search failed.';
-        _searching = false;
-      });
+  void _onInviteSubmitted(String text) {
+    if (_inviteCode == null && text.trim().isNotEmpty) {
+      setState(() => _inviteHint =
+          'Enter the 6-character code, like ABC-DEF, or paste the invite link.');
     }
   }
 
-  Future<void> _joinGroup(BuildContext context, Group group) async {
-    if (group.isMember) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('You are already a member of ${group.name}')));
-      return;
-    }
+  Future<void> _scan() async {
+    final code = await Navigator.of(context).push<String>(
+      MaterialPageRoute(builder: (_) => const ScanInviteScreen()),
+    );
+    if (code == null || !mounted) return;
+    _invite.text = formatInviteCode(code);
+    _onInviteChanged(code);
+  }
 
-    String password = '';
-    if (!group.isPublic) {
-      final entered = await showDialog<String?>(
-        context: context,
-        builder: (ctx) {
-          final ctl = TextEditingController();
-          return AlertDialog(
-            title: Text('Join ${group.id}'),
-            content: TextField(
-              controller: ctl,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Group password'),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.of(ctx).pop(ctl.text), child: const Text('Join')),
-            ],
-          );
-        },
-      );
+  void _clearInvite() {
+    _invite.clear();
+    _onInviteChanged('');
+  }
 
-      if (entered == null) return;
-      password = entered;
-    }
+  Future<void> _joined(Group group) async {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('Joined ${group.name}')));
+    _clearInvite();
+    await _loadGroups();
+    if (!mounted) return;
+    // A first group becomes the primary group, which colors the app.
+    TeamAccent.of(context).refresh();
+    await _openGroup(group);
+  }
 
+  Future<void> _openGroupById(String id) async {
+    Group? find() => _groups.where((g) => g.id == id).firstOrNull;
+    // Joined somewhere the list hasn't caught up with yet.
+    if (find() == null) await _loadGroups();
+    final group = find();
+    if (group == null || !mounted) return;
+    _clearInvite();
+    await _openGroup(group);
+  }
+
+  Future<void> _askToJoin() async {
+    final id = _requestId.text.trim();
+    if (id.isEmpty) return;
+    setState(() {
+      _requesting = true;
+      _requestMessage = null;
+    });
     try {
-      final joined = await _groupsApi.joinGroup(group.id, password);
+      final result = await _groupsApi.requestToJoin(id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Joined ${joined.name}')));
-      await _loadGroups();
-      // A first group becomes the primary group, which colors the app.
-      if (mounted) TeamAccent.of(this.context).refresh();
-      // update search result locally
       setState(() {
-        _searchResults = _searchResults.map((g) => g.id == group.id ? Group(id: g.id, name: g.name, isPublic: g.isPublic, isMember: true) : g).toList();
+        _requestFailed = false;
+        _requestMessage = result.alreadyMember
+            ? "You're already in ${result.groupName}."
+            : "Request sent to ${result.groupName}. You'll be in once an "
+                'admin approves.';
       });
+      if (!result.alreadyMember) _requestId.clear();
     } on ApiException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (_) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unable to join group.')));
+      if (!mounted) return;
+      setState(() {
+        _requestFailed = true;
+        _requestMessage = e.message;
+      });
+    } finally {
+      if (mounted) setState(() => _requesting = false);
     }
   }
 
@@ -176,12 +177,14 @@ class _GroupsScreenState extends State<GroupsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Created ${created.name}')),
     );
-    await _loadGroups();
-    if (mounted) TeamAccent.of(context).refresh();
+    unawaited(_loadGroups());
+    TeamAccent.of(context).refresh();
+    await showInviteTeamSheet(context, created);
   }
 
   @override
   Widget build(BuildContext context) {
+    final team = TeamAccent.of(context);
     return RefreshIndicator(
       onRefresh: _loadGroups,
       child: ListView(
@@ -214,7 +217,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
                     TextSpan(
                       text: 'Create one',
                       style: TextStyle(
-                        color: TeamAccent.of(context).accent,
+                        color: team.accent,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -225,49 +228,137 @@ class _GroupsScreenState extends State<GroupsScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Search updates as you type.
-          TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: 'Find a group by ID',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _searchController.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'Clear search',
-                      icon: const Icon(Icons.close),
-                      onPressed: () {
-                        _searchController.clear();
-                        _onSearchChanged('');
-                      },
-                    ),
-              filled: true,
-              fillColor: const Color(0xFF121212),
-              border: const OutlineInputBorder(borderRadius: BorderRadius.zero),
-            ),
-            textCapitalization: TextCapitalization.none,
-            textInputAction: TextInputAction.search,
-            onChanged: _onSearchChanged,
-            onSubmitted: (text) {
-              _searchDebounce?.cancel();
-              _searchGroups(text);
-            },
+          const Text('Join a group', style: TextStyle(color: kMuted)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _invite,
+                  decoration: InputDecoration(
+                    hintText: 'Enter a code or paste a link',
+                    prefixIcon: const Icon(Icons.group_add_outlined),
+                    suffixIcon: _invite.text.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: 'Clear',
+                            icon: const Icon(Icons.close),
+                            onPressed: _clearInvite,
+                          ),
+                    filled: true,
+                    fillColor: const Color(0xFF121212),
+                    border: const OutlineInputBorder(
+                        borderRadius: BorderRadius.zero),
+                  ),
+                  autocorrect: false,
+                  textCapitalization: TextCapitalization.characters,
+                  textInputAction: TextInputAction.go,
+                  onChanged: _onInviteChanged,
+                  onSubmitted: _onInviteSubmitted,
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                height: 56,
+                child: OutlinedButton.icon(
+                  onPressed: _scan,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: kSurfaceLight),
+                    shape: const RoundedRectangleBorder(),
+                  ),
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: const Text('Scan QR'),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
+          if (_inviteCode != null) ...[
+            const SizedBox(height: 12),
+            InvitePreviewCard(
+              api: _groupsApi,
+              code: _inviteCode!,
+              onJoined: _joined,
+              onOpen: _openGroupById,
+            ),
+          ] else if (_inviteHint != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(_inviteHint!,
+                  style: const TextStyle(color: kMuted, height: 1.4)),
+            ),
 
-          if (_searching && _searchResults.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 12),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (_searchError != null)
-            _Notice(message: _searchError!, actionLabel: 'Retry', onAction: () => _searchGroups(_searchController.text))
-          else if (_searchResults.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            ..._searchResults.map((g) => _SearchResultCard(group: g, onJoin: () => _joinGroup(context, g))).toList(),
-            const Divider(color: Color(0xFF2A2A2A)),
+          // Without an invite: ask with the group's exact ID.
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => setState(() => _asking = !_asking),
+              style: TextButton.styleFrom(padding: EdgeInsets.zero),
+              child: Text.rich(
+                TextSpan(
+                  text: "Know the group's ID? ",
+                  style: const TextStyle(color: kMuted, fontSize: 13),
+                  children: [
+                    TextSpan(
+                      text: 'Ask to join',
+                      style: TextStyle(
+                        color: team.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          if (_asking) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _requestId,
+                    enabled: !_requesting,
+                    decoration: const InputDecoration(
+                      hintText: 'Group ID',
+                      isDense: true,
+                      filled: true,
+                      fillColor: Color(0xFF121212),
+                      border:
+                          OutlineInputBorder(borderRadius: BorderRadius.zero),
+                    ),
+                    autocorrect: false,
+                    // IDs are letters and numbers only (see CreateGroupDialog).
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp('[A-Za-z0-9]')),
+                    ],
+                    textInputAction: TextInputAction.send,
+                    onSubmitted: (_) => _askToJoin(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: _requesting ? null : _askToJoin,
+                  style: FilledButton.styleFrom(
+                      backgroundColor: team.fill, foregroundColor: team.ink),
+                  child: Text(_requesting ? 'Sending…' : 'Ask'),
+                ),
+              ],
+            ),
+            if (_requestMessage != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _requestMessage!,
+                  style: TextStyle(
+                      color: _requestFailed
+                          ? const Color(0xFFFF8A80)
+                          : Colors.white,
+                      height: 1.4),
+                ),
+              ),
           ],
-
+          const SizedBox(height: 8),
+          const Divider(color: Color(0xFF2A2A2A)),
           const SizedBox(height: 8),
 
           const Text('My groups', style: TextStyle(color: kMuted)),
@@ -283,8 +374,8 @@ class _GroupsScreenState extends State<GroupsScreen> {
           else if (_groups.isEmpty)
             EmptyState(
               title: 'No groups yet',
-              message: "Search for your team's group by its ID above and "
-                  'join it, or create a new one for your team.',
+              message: "Enter your team's invite code above to join its "
+                  'group, or create a new one for your team.',
               actionLabel: 'Create a group',
               onAction: _createGroup,
             )
@@ -365,6 +456,77 @@ class _GroupsScreenState extends State<GroupsScreen> {
     // The color or roster may have changed there.
     if (mounted) _loadGroups();
   }
+}
+
+/// An invite link opened the app: the invite's preview over whatever is
+/// showing, to join from (or open the group, if the user is in it already).
+/// [onJoined] hears about a join, so the Groups tab can reload.
+Future<void> showInvitePreviewSheet(
+  BuildContext context,
+  AuthService auth,
+  String code, {
+  VoidCallback? onJoined,
+}) {
+  final api = GroupsApi(auth.api);
+  final navigator = Navigator.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  final team = TeamAccent.of(context);
+
+  Future<void> open(Group group) => navigator.push(MaterialPageRoute(
+      builder: (_) => GroupSettingsScreen(auth: auth, group: group)));
+
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: kBackground,
+    showDragHandle: true,
+    builder: (sheet) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "You're invited",
+              style: TextStyle(
+                color: team.accent,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text('Invite code ${formatInviteCode(code)}',
+                style: const TextStyle(color: kMuted)),
+            const SizedBox(height: 14),
+            InvitePreviewCard(
+              api: api,
+              code: code,
+              onJoined: (group) {
+                Navigator.of(sheet).pop();
+                messenger.showSnackBar(
+                    SnackBar(content: Text('Joined ${group.name}')));
+                onJoined?.call();
+                // A first group becomes the primary group.
+                team.refresh();
+                open(group);
+              },
+              onOpen: (id) async {
+                Navigator.of(sheet).pop();
+                try {
+                  final groups = await api.getMyGroups();
+                  final group = groups.where((g) => g.id == id).firstOrNull;
+                  if (group != null) await open(group);
+                } on ApiException catch (e) {
+                  messenger.showSnackBar(SnackBar(content: Text(e.message)));
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class _GroupCard extends StatelessWidget {
@@ -458,29 +620,6 @@ class _Notice extends StatelessWidget {
             OutlinedButton(onPressed: onAction, child: Text(actionLabel!)),
           ]
         ],
-      ),
-    );
-  }
-}
-
-class _SearchResultCard extends StatelessWidget {
-  const _SearchResultCard({required this.group, required this.onJoin});
-
-  final Group group;
-  final VoidCallback onJoin;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      color: const Color(0xFF111111),
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        title: Text(group.id, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        subtitle: Text(group.name, style: const TextStyle(color: kMuted)),
-        trailing: group.isMember
-            ? const Text('Member', style: TextStyle(color: kMuted))
-            : FilledButton(onPressed: onJoin, child: const Text('Join')),
       ),
     );
   }

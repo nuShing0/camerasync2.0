@@ -6,9 +6,9 @@ import '../api/groups_api.dart';
 import '../team_accent.dart';
 import '../theme.dart';
 
-/// The "new group" overlay from the Create A Group design: name, ID,
-/// visibility (with a password when private) and a team color. Pops with the
-/// created [Group], or null if cancelled.
+/// The "new group" overlay from the Create A Group design: name, ID and a
+/// team color. Groups are invite-only, so there's no privacy to pick. Pops
+/// with the created [Group], or null if cancelled.
 class CreateGroupDialog extends StatefulWidget {
   const CreateGroupDialog({super.key, required this.groupsApi});
 
@@ -21,8 +21,6 @@ class CreateGroupDialog extends StatefulWidget {
 class _CreateGroupDialogState extends State<CreateGroupDialog> {
   final _name = TextEditingController();
   final _id = TextEditingController();
-  final _password = TextEditingController();
-  bool _isPrivate = false;
   String _color = kTeamColors.first.$2;
   bool _submitting = false;
   String? _error;
@@ -31,16 +29,12 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
   void dispose() {
     _name.dispose();
     _id.dispose();
-    _password.dispose();
     super.dispose();
   }
 
   String? _validate() {
     if (_name.text.trim().isEmpty) return 'Please enter a group name.';
     if (_id.text.isEmpty) return 'Please choose a group ID.';
-    if (_isPrivate && _password.text.trim().isEmpty) {
-      return 'Private groups need a password.';
-    }
     return null;
   }
 
@@ -59,8 +53,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
       final group = await widget.groupsApi.createGroup(
         id: _id.text,
         name: _name.text.trim(),
-        isPublic: !_isPrivate,
-        password: _password.text,
         primaryColor: _color,
       );
       if (mounted) Navigator.of(context).pop(group);
@@ -117,35 +109,12 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
               label: 'Group ID',
               controller: _id,
               hint: 'Letters and numbers only',
-              // Teammates search by this ID, so it's restricted to what the
-              // server accepts instead of failing on submit.
+              // People can ask to join by this ID, so it's restricted to
+              // what the server accepts instead of failing on submit.
               inputFormatters: [
                 FilteringTextInputFormatter.allow(RegExp('[A-Za-z0-9]')),
               ],
             ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              activeThumbColor: TeamAccent.of(context).accent,
-              title: const Text(
-                'Private group',
-                style: TextStyle(color: Colors.white, fontSize: 14),
-              ),
-              subtitle: const Text(
-                'Members need the password to join',
-                style: TextStyle(color: kMuted, fontSize: 12),
-              ),
-              value: _isPrivate,
-              onChanged: _submitting
-                  ? null
-                  : (value) => setState(() => _isPrivate = value),
-            ),
-            if (_isPrivate)
-              _field(
-                label: 'Group Password',
-                controller: _password,
-                hint: '••••••••',
-                obscure: true,
-              ),
             const SizedBox(height: 4),
             const Text(
               'Team color',
@@ -222,7 +191,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
     required String label,
     required TextEditingController controller,
     required String hint,
-    bool obscure = false,
     List<TextInputFormatter>? inputFormatters,
   }) {
     return Padding(
@@ -241,7 +209,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
           const SizedBox(height: 6),
           TextField(
             controller: controller,
-            obscureText: obscure,
             enabled: !_submitting,
             inputFormatters: inputFormatters,
             style: const TextStyle(color: Color(0xFFF0F0F0)),

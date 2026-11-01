@@ -4,6 +4,7 @@ import 'dart:ui' show lerpDouble;
 import 'package:flutter/material.dart';
 
 import '../auth/auth_service.dart';
+import '../groups/invite_links.dart';
 import '../team_accent.dart';
 import '../theme.dart';
 import '../notifications/phone_alerts.dart';
@@ -45,6 +46,9 @@ class _HomeShellState extends State<HomeShell>
   /// Ticks when the + menu starts or schedules a session.
   final _sessionsChanged = ValueNotifier<int>(0);
 
+  /// Ticks when a group is joined from an invite link.
+  final _groupsChanged = ValueNotifier<int>(0);
+
   /// Phone notifications for activity in the user's groups, while signed in.
   late final PhoneAlerts _alerts = PhoneAlerts(widget.auth);
 
@@ -58,6 +62,19 @@ class _HomeShellState extends State<HomeShell>
     unawaited(queue.start());
     // TV mode: a TV plugged in gets the app's TV screen (see TvLink).
     TvLink.instance.start();
+    // An invite link opened before sign-in shows now; later ones as they
+    // come.
+    InviteLinks.instance.pending.addListener(_showInvite);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _showInvite());
+  }
+
+  /// The invite preview for a link that opened the app, over whatever is
+  /// showing.
+  void _showInvite() {
+    if (!mounted || InviteLinks.instance.pending.value == null) return;
+    final code = InviteLinks.instance.take()!;
+    showInvitePreviewSheet(context, widget.auth, code,
+        onJoined: () => _groupsChanged.value++);
   }
 
   /// The + menu: the nav bar grows up into a panel of choices.
@@ -82,10 +99,12 @@ class _HomeShellState extends State<HomeShell>
 
   @override
   void dispose() {
+    InviteLinks.instance.pending.removeListener(_showInvite);
     _menu.dispose();
     _alerts.stop();
     _sessionsSegment.dispose();
     _sessionsChanged.dispose();
+    _groupsChanged.dispose();
     super.dispose();
   }
 
@@ -126,7 +145,7 @@ class _HomeShellState extends State<HomeShell>
         onOpenGroups: () => setState(() => _index = _groups),
         onOpenCalendar: () => setState(() => _index = _calendar),
       ),
-      GroupsScreen(auth: widget.auth),
+      GroupsScreen(auth: widget.auth, refresh: _groupsChanged),
       const SizedBox.shrink(), // the + button's slot
       SessionsTab(
         auth: widget.auth,

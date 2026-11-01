@@ -23,6 +23,9 @@ dependencies:
   url_launcher: ^6.3.3
   wakelock_plus: ^1.8.1
   video_compress: ^3.1.4
+  mobile_scanner: ^7.4.3
+  qr_flutter: ^4.1.0
+  app_links: ^7.2.2
 
 # Project copies of the camera plugins with one addition each: they report
 # when a recording's first frame was captured (see packages/*/README-8kount).

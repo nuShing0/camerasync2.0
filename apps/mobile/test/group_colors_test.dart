@@ -34,7 +34,6 @@ void main() {
     final group = Group.fromJson({
       'id': 'ucfcheer',
       'name': 'UCF Cheer',
-      'isPublic': true,
       'primaryColor': '#ead217',
     });
     expect(group.primaryColor, '#ead217');

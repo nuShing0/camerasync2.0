@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../api/api_client.dart';
 import '../api/groups_api.dart';
+import '../api/notifications_api.dart' show timeAgo;
 import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
 import '../config.dart';
 import '../team_accent.dart';
 import '../theme.dart';
+import '../widgets/invite_panel.dart';
 import 'recordings_screen.dart';
 import 'session_screen.dart';
 import 'watch_screen.dart';
@@ -21,8 +21,8 @@ const _roleLabel = {
 
 /// One group's page, opened by tapping its card (the web app's group page):
 /// its live session to join or starting one, its recordings, and below them
-/// its settings: primary group, team color (admins and the owner), invites
-/// and the roster.
+/// its settings: primary group, team color (admins and the owner), the
+/// invite, requests to join (admins) and the roster.
 class GroupSettingsScreen extends StatefulWidget {
   const GroupSettingsScreen(
       {super.key, required this.auth, required this.group});
@@ -38,6 +38,10 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
   late final GroupsApi _api = GroupsApi(widget.auth.api);
   late Group _group = widget.group;
   bool _savingPrimary = false;
+  bool _resettingInvite = false;
+
+  /// Bumped when someone is let in, so the roster loads again.
+  int _rosterVersion = 0;
 
   int? get _userId => widget.auth.user?.id;
   bool get _isOwner => _group.owner != null && _group.owner == _userId;
@@ -55,6 +59,27 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
       _toast(e.message);
     } finally {
       if (mounted) setState(() => _savingPrimary = false);
+    }
+  }
+
+  /// A new invite code and link, after asking: the old ones stop working.
+  Future<void> _resetInvite() async {
+    final ok = await _confirm(
+      context,
+      'Reset the invite for ${_group.name}? The old link, code and QR stop working.',
+      'Reset',
+    );
+    if (!ok || !mounted) return;
+    setState(() => _resettingInvite = true);
+    try {
+      final updated = await _api.resetInvite(_group.id);
+      if (!mounted) return;
+      setState(() => _group = updated);
+      _toast('New invite ready');
+    } on ApiException catch (e) {
+      _toast(e.message);
+    } finally {
+      if (mounted) setState(() => _resettingInvite = false);
     }
   }
 
@@ -102,7 +127,7 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                               fontWeight: FontWeight.w800)),
                       const SizedBox(height: 4),
                       Text(
-                        'ID ${_group.id} · ${_group.isPublic ? 'Public' : 'Private'} · You\'re $yourRole',
+                        'ID ${_group.id} · You\'re $yourRole',
                         style: TextStyle(
                             color: ink.withValues(alpha: 0.75), fontSize: 13),
                       ),
@@ -166,8 +191,26 @@ class _GroupSettingsScreenState extends State<GroupSettingsScreen> {
                 TeamAccent.of(context).refresh();
               },
             ),
-          if (_group.inviteUrl != null) _InviteSection(group: _group),
+          if (_group.inviteCode != null && _group.inviteUrl != null)
+            _Section(
+              title: 'Invite people',
+              children: [
+                InvitePanel(
+                  group: _group,
+                  onReset:
+                      _group.canManage(_userId) ? _resetInvite : null,
+                  resetting: _resettingInvite,
+                ),
+              ],
+            ),
+          if (_group.canManage(_userId))
+            _RequestsSection(
+              group: _group,
+              api: _api,
+              onApproved: () => setState(() => _rosterVersion++),
+            ),
           _MembersSection(
+            key: ValueKey(_rosterVersion),
             group: _group,
             api: _api,
             userId: _userId,
@@ -281,7 +324,7 @@ class _GroupSessionsState extends State<_GroupSessions> {
   void _start() => _run(() => _api.createLiveSession(
         groupId: widget.group.id,
         name: _name.text.trim().isEmpty
-            ? '${widget.group.name} practice'
+            ? '${widget.group.name} session'
             : _name.text.trim(),
       ));
 
@@ -302,7 +345,7 @@ class _GroupSessionsState extends State<_GroupSessions> {
     return Column(
       children: [
         _Section(
-          title: 'Practice',
+          title: 'Session',
           children: [
             for (final s in live)
               Padding(
@@ -332,8 +375,8 @@ class _GroupSessionsState extends State<_GroupSessions> {
                 controller: _name,
                 maxLength: 100,
                 style: const TextStyle(color: Colors.white),
-                decoration: InputDecoration(
-                  hintText: '${widget.group.name} practice',
+                decoration: const InputDecoration(
+                  hintText: 'Session name',
                   counterText: '',
                 ),
               ),
@@ -571,6 +614,7 @@ class _ColorSectionState extends State<_ColorSection> {
 
 class _MembersSection extends StatefulWidget {
   const _MembersSection({
+    super.key,
     required this.group,
     required this.api,
     required this.userId,
@@ -788,8 +832,8 @@ Future<bool> _confirm(
   return ok == true;
 }
 
-/// The owner's controls: the group's name and privacy, handing it to
-/// someone else (after which they can leave), and deleting it.
+/// The owner's controls: the group's name, handing it to someone else
+/// (after which they can leave), and deleting it.
 class _OwnerSection extends StatefulWidget {
   const _OwnerSection({
     required this.group,
@@ -811,15 +855,12 @@ class _OwnerSection extends StatefulWidget {
 
 class _OwnerSectionState extends State<_OwnerSection> {
   late final _name = TextEditingController(text: widget.group.name);
-  final _password = TextEditingController();
-  late bool _isPublic = widget.group.isPublic;
   bool _busy = false;
   String? _error;
 
   @override
   void dispose() {
     _name.dispose();
-    _password.dispose();
     super.dispose();
   }
 
@@ -841,13 +882,8 @@ class _OwnerSectionState extends State<_OwnerSection> {
   }
 
   Future<void> _saveDetails() => _run(() async {
-        final updated = await widget.api.updateDetails(
-          widget.group.id,
-          name: _name.text.trim(),
-          isPublic: _isPublic,
-          password: _password.text,
-        );
-        _password.clear();
+        final updated = await widget.api
+            .updateDetails(widget.group.id, name: _name.text.trim());
         widget.onSaved(updated);
         _toast('Group details saved');
       });
@@ -868,7 +904,6 @@ class _OwnerSectionState extends State<_OwnerSection> {
   @override
   Widget build(BuildContext context) {
     final team = TeamAccent.of(context);
-    final privateNeedsPassword = !_isPublic && widget.group.isPublic;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -882,29 +917,6 @@ class _OwnerSectionState extends State<_OwnerSection> {
               decoration:
                   const InputDecoration(labelText: 'Name', counterText: ''),
             ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: !_isPublic,
-              activeThumbColor: team.accent,
-              onChanged: _busy
-                  ? null
-                  : (private) => setState(() => _isPublic = !private),
-              title:
-                  const Text('Private', style: TextStyle(color: Colors.white)),
-              subtitle: const Text('People need a password to join',
-                  style: TextStyle(color: kMuted)),
-            ),
-            if (!_isPublic)
-              TextField(
-                controller: _password,
-                obscureText: true,
-                enabled: !_busy,
-                decoration: InputDecoration(
-                  labelText: privateNeedsPassword
-                      ? 'Password'
-                      : 'New password (blank keeps the current one)',
-                ),
-              ),
             const SizedBox(height: 12),
             Align(
               alignment: Alignment.centerRight,
@@ -967,7 +979,7 @@ class _LeaveSectionState extends State<_LeaveSection> {
   Future<void> _leave() async {
     final ok = await _confirm(
       context,
-      "Leave ${widget.group.name}? You'll need its ID${widget.group.isPublic ? '' : ' and password'} to join again.",
+      "Leave ${widget.group.name}? You'll need an invite to join again.",
       'Leave',
     );
     if (!ok || !mounted) return;
@@ -1017,54 +1029,122 @@ class _LeaveSectionState extends State<_LeaveSection> {
   }
 }
 
-/// The group's invite link: Share opens the phone's share sheet (Messages,
-/// Snapchat, ...); the copy button puts the link on the clipboard.
-class _InviteSection extends StatelessWidget {
-  const _InviteSection({required this.group});
+/// People who asked to join with the group's ID, for admins and the owner to
+/// let in or turn down. Hidden while there are none.
+class _RequestsSection extends StatefulWidget {
+  const _RequestsSection(
+      {required this.group, required this.api, required this.onApproved});
 
   final Group group;
+  final GroupsApi api;
+
+  /// Someone was let in, so the roster has changed.
+  final VoidCallback onApproved;
+
+  @override
+  State<_RequestsSection> createState() => _RequestsSectionState();
+}
+
+class _RequestsSectionState extends State<_RequestsSection> {
+  List<JoinRequest> _requests = const [];
+
+  /// The request being answered, so its buttons wait.
+  int? _answering;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final requests = await widget.api.getRequests(widget.group.id);
+      if (mounted) setState(() => _requests = requests);
+    } on ApiException {
+      // Nothing to show; the section stays hidden.
+    }
+  }
+
+  Future<void> _answer(JoinRequest request, {required bool approve}) async {
+    final messenger = ScaffoldMessenger.of(context);
+    setState(() => _answering = request.userId);
+    try {
+      if (approve) {
+        await widget.api.approveRequest(widget.group.id, request.userId);
+        messenger.showSnackBar(
+            SnackBar(content: Text('${request.name} is in ${widget.group.name}')));
+        widget.onApproved();
+      } else {
+        await widget.api.declineRequest(widget.group.id, request.userId);
+      }
+    } on ApiException catch (e) {
+      // Another admin may have answered it first; it's gone either way.
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+      if (e.statusCode != 404) {
+        if (mounted) setState(() => _answering = null);
+        return;
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _answering = null;
+      _requests = [
+        ..._requests.where((r) => r.userId != request.userId),
+      ];
+    });
+  }
+
+  /// "Asked 5m ago", "Asked just now", "Asked Sep 29".
+  static String _asked(DateTime at) {
+    final ago = timeAgo(at);
+    if (ago == 'just now') return 'Asked just now';
+    return RegExp(r'^\d').hasMatch(ago) ? 'Asked $ago ago' : 'Asked $ago';
+  }
 
   @override
   Widget build(BuildContext context) {
+    if (_requests.isEmpty) return const SizedBox.shrink();
     final team = TeamAccent.of(context);
-    final link = group.inviteUrl!;
     return _Section(
-      title: 'Invite people',
+      title: 'Requests to join (${_requests.length})',
       children: [
-        Text(
-          group.isPublic
-              ? 'Anyone with this link can join.'
-              : 'Anyone with this link can join once they enter the group password.',
-          style: const TextStyle(color: kMuted, height: 1.4),
-        ),
-        const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(
-              child: FilledButton.icon(
-                onPressed: () => SharePlus.instance.share(
-                  ShareParams(text: 'Join ${group.name} on 8kount: $link'),
+        for (final request in _requests)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(request.name,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 15)),
+                      Text(_asked(request.requestedAt),
+                          style: const TextStyle(color: kMuted, fontSize: 13)),
+                    ],
+                  ),
                 ),
-                style: FilledButton.styleFrom(
-                    backgroundColor: team.fill, foregroundColor: team.ink),
-                icon: const Icon(Icons.ios_share),
-                label: const Text('Share invite link'),
-              ),
+                TextButton(
+                  onPressed: _answering != null
+                      ? null
+                      : () => _answer(request, approve: false),
+                  style: TextButton.styleFrom(foregroundColor: kMuted),
+                  child: const Text('Decline'),
+                ),
+                const SizedBox(width: 4),
+                FilledButton(
+                  onPressed: _answering != null
+                      ? null
+                      : () => _answer(request, approve: true),
+                  style: FilledButton.styleFrom(
+                      backgroundColor: team.fill, foregroundColor: team.ink),
+                  child: const Text('Approve'),
+                ),
+              ],
             ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Copy invite link',
-              icon: const Icon(Icons.copy, color: Colors.white70),
-              onPressed: () async {
-                await Clipboard.setData(ClipboardData(text: link));
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Invite link copied')));
-                }
-              },
-            ),
-          ],
-        ),
+          ),
       ],
     );
   }
