@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api/api_client.dart';
 import 'auth/auth_service.dart';
 import 'config.dart';
+import 'groups/invite_links.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'screens/verify_email_screen.dart';
@@ -16,6 +17,9 @@ void main() {
   final auth = AuthService(ApiClient(kServerUrl));
   // Fire-and-forget: the UI shows a spinner while `loading` is true.
   auth.restoreSession();
+  // An invite link (eightkount://join/<CODE>) may have opened the app; HomeShell
+  // shows it once signed in.
+  InviteLinks.instance.start().catchError((_) {});
   runApp(CameraSyncApp(auth: auth));
 }
 

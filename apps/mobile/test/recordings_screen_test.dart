@@ -58,8 +58,8 @@ void main() {
       } else if (req.uri.path == '/api/groups') {
         body = {
           'groups': [
-            {'id': 'cheer', 'name': 'UCF Cheer', 'isPublic': true},
-            {'id': 'dance', 'name': 'Dance Team', 'isPublic': true},
+            {'id': 'cheer', 'name': 'UCF Cheer'},
+            {'id': 'dance', 'name': 'Dance Team'},
           ],
         };
       } else {

@@ -10,7 +10,7 @@ AppNotification note(String type, {String? status}) => AppNotification.fromJson(
       'unread': true,
       'actor': {'id': 2, 'name': 'Coach Taylor'},
       'group': {'id': 'ucfcheer', 'name': 'UCF Cheer'},
-      if (type != 'join')
+      if (type != 'join' && type != 'request')
         'session': {'id': 'abc123', 'name': 'Stunt practice', 'status': status ?? 'complete'},
       if (type == 'comment') 'comment': {'body': 'Lock out the knees', 'videoTimeMs': 0},
     });
@@ -40,5 +40,13 @@ void main() {
     expect(alertTitle(note('join')), 'Coach Taylor joined UCF Cheer');
     expect(alertTitle(note('session', status: 'active')),
         'Coach Taylor started Stunt practice. Join now');
+  });
+
+  test('requests to join follow the joins switch and read sensibly', () {
+    expect(wanted(note('request'), const {}), isTrue);
+    expect(wanted(note('request'), const {'joins': false}), isFalse);
+    expect(wanted(note('request'), const {'sessions': false}), isTrue);
+    expect(alertTitle(note('request')), 'Coach Taylor asked to join UCF Cheer');
+    expect(alertBody(note('request')), "Approve or decline it on the group's page.");
   });
 }

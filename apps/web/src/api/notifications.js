@@ -36,7 +36,7 @@ export function timeAgo(at, now = new Date()) {
 /// it) or its recording once it's over.
 export function notificationLink(notification) {
   const { type, session, group } = notification;
-  if (type === "join") return `/groups/${encodeURIComponent(group.id)}`;
+  if (type === "join" || type === "request") return `/groups/${encodeURIComponent(group.id)}`;
   if (type === "session" && session.status === "active") return "/record";
   return `/watch/${session.id}`;
 }

@@ -53,18 +53,20 @@ beforeAll(async () => {
   dancer = await signUp("Dancer");
   stranger = await signUp("Stranger");
 
+  let inviteCode;
   for (const [user, id] of [[coach, GROUP_ID], [stranger, OTHER_GROUP_ID]]) {
     const created = await request(app)
       .post("/api/groups")
       .set("Cookie", user.cookie)
-      .send({ id, name: `Group ${id}`, isPublic: true });
+      .send({ id, name: `Group ${id}` });
     expect(created.status).toBe(201);
+    if (id === GROUP_ID) inviteCode = created.body.group.inviteCode;
   }
 
   // The dancer joins, then the coach starts a practice and the dancer
   // comments on it. Meanwhile the stranger is busy in a group of their own.
   const joined = await request(app)
-    .post(`/api/groups/${GROUP_ID}/join`)
+    .post(`/api/groups/invites/${inviteCode}/join`)
     .set("Cookie", dancer.cookie)
     .send({});
   expect(joined.status).toBe(201);

@@ -389,7 +389,7 @@ class _HomeTabState extends State<HomeTab> {
             const _EmptyNote(
               icon: Icons.calendar_today_outlined,
               title: 'Nothing scheduled this week',
-              message: 'Scheduled practices show up here.',
+              message: 'Scheduled sessions show up here.',
             )
           else ...[
             for (final s in _thisWeek.take(_weekOnHome))
@@ -422,7 +422,7 @@ class _HomeTabState extends State<HomeTab> {
                     : const _EmptyNote(
                         icon: Icons.notifications_none,
                         title: "You're all caught up",
-                        message: 'Comments, new teammates and practices '
+                        message: 'Comments, new teammates and sessions '
                             'starting show up here.',
                       )
                 : Column(

@@ -79,7 +79,8 @@ export function PlaybackScreen({ live = null } = {}) {
   // A session opens on its list of recordings (takes); ?recording=N plays
   // one. A session with a single recording goes straight to it.
   const [searchParams] = useSearchParams();
-  const [liveChoice, setLiveChoice] = useState(0);
+  // Over a live session it can open on one recording (live.initial, its number).
+  const [liveChoice, setLiveChoice] = useState(live?.initial ?? 0);
   const chosen = live ? liveChoice : Number(searchParams.get("recording"));
   const chosenIndex = chosen
     ? recordings.findIndex((recording, index) => (recording.number ?? index + 1) === chosen)

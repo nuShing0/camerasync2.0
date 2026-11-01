@@ -43,6 +43,13 @@ function NotificationText({ notification: n }) {
       </span>
     );
   }
+  if (n.type === "request") {
+    return (
+      <span>
+        {actor} asked to join <strong>{n.group.name}</strong>
+      </span>
+    );
+  }
   if (n.type === "join") {
     return (
       <span>

@@ -31,8 +31,9 @@ class _FakeApi extends ApiClient {
     final group = {
       'id': body['id'],
       'name': body['name'],
-      'isPublic': body['isPublic'],
       'role': 'admin',
+      'inviteCode': 'K7Q2MX',
+      'inviteUrl': 'https://8kount.app/join/K7Q2MX',
     };
     groups.insert(0, group);
     return {'group': group};
@@ -66,7 +67,8 @@ void main() {
     expect(find.text('Create a group'), findsOneWidget);
   });
 
-  testWidgets('creates a public group and lists it', (tester) async {
+  testWidgets('creates a group, shows its invite, and lists it',
+      (tester) async {
     final api = await openDialog(tester);
 
     await tester.enterText(field('Group Name'), 'Team Knightro');
@@ -77,10 +79,14 @@ void main() {
     expect(api.created.single, {
       'id': 'knightro',
       'name': 'Team Knightro',
-      'isPublic': true,
       'primaryColor': '#ead217',
     });
     expect(find.byType(Dialog), findsNothing);
+    // Straight to inviting the team.
+    expect(find.text('Invite your team'), findsOneWidget);
+    expect(find.text('K7Q-2MX'), findsOneWidget);
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
     expect(find.text('Group ID: knightro'), findsOneWidget);
   });
 
@@ -92,26 +98,12 @@ void main() {
     expect(find.text('ucfcheer2026'), findsOneWidget);
   });
 
-  testWidgets('private group requires a password, then sends it',
+  testWidgets('there is no public/private choice or password',
       (tester) async {
-    final api = await openDialog(tester);
+    await openDialog(tester);
 
-    await tester.enterText(field('Group Name'), 'UCF Cheer');
-    await tester.enterText(field('Group ID'), 'ucfcheer');
-    await tester.tap(find.text('Private group'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Create'));
-    await tester.pump();
-
-    expect(find.text('Private groups need a password.'), findsOneWidget);
-    expect(api.created, isEmpty);
-
-    await tester.enterText(field('Group Password'), 'gonights');
-    await tester.tap(find.text('Create'));
-    await tester.pumpAndSettle();
-
-    expect(api.created.single['isPublic'], false);
-    expect(api.created.single['password'], 'gonights');
+    expect(find.text('Private group'), findsNothing);
+    expect(find.text('Group Password'), findsNothing);
   });
 
   testWidgets('shows the server error for a taken ID and stays open',

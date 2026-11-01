@@ -264,17 +264,27 @@ CREATE TABLE IF NOT EXISTS email_verifications (
     expires TIMESTAMPTZ NOT NULL
 );
 
--- Wrong passwords when joining a private group, per person per group. Five
--- misses within 15 minutes locks that person out of joining the group for
--- 15 minutes (see POST /api/groups/:id/join); a correct password clears it.
-CREATE TABLE IF NOT EXISTS group_join_attempts (
+-- Each group's invite: a short code (shown as ABC-DEF) that also makes its
+-- link and QR. Anyone with it can join; an admin can swap it for a new one.
+-- Groups made before invites get a code here.
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS invite_code VARCHAR(16);
+UPDATE groups
+   SET invite_code = UPPER(SUBSTRING(MD5(group_id || RANDOM()::text) FROM 1 FOR 6))
+ WHERE invite_code IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS groups_invite_code_idx ON groups (invite_code);
+
+-- Someone asking to join a group by its ID, without an invite. They're in
+-- once an admin approves; declining or approving removes the request.
+CREATE TABLE IF NOT EXISTS group_join_requests (
     group_id VARCHAR(64) NOT NULL REFERENCES groups(group_id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    failures INT NOT NULL DEFAULT 0,
-    last_failed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    locked_until TIMESTAMPTZ,
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (group_id, user_id)
 );
+
+-- Group passwords are gone (invites replaced them), and with them the
+-- lockout for wrong ones.
+DROP TABLE IF EXISTS group_join_attempts;
 
 -- 8kount's yellow is now the design's #EAD217 (it was #ffc72c). Groups still
 -- on the old gold move to the new one so they match the palette.
