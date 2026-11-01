@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
+  approveJoinRequest,
   changeGroupMemberRole,
+  declineJoinRequest,
+  getJoinRequests,
   getGroupMembers,
   getGroups,
   removeGroupMember,
@@ -15,13 +18,15 @@ import {
 } from "../api/groups.js";
 import { createLiveSession, getSessions, joinSession } from "../api/recordings.js";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { InviteCard } from "../components/InviteCard.jsx";
+import { LiveCard, NowRow } from "../components/LiveCard.jsx";
 import { TeamColorPicker } from "../components/TeamColorPicker.jsx";
 import { useGroupTheme } from "../theme/GroupThemeContext.jsx";
 import { groupTile } from "../theme/groupTheme.js";
 import { teamColor } from "../theme/teamColors.js";
 
 const ROSTER_PAGE_SIZE = 30;
-const RECORDINGS_ON_PAGE = 4;
+const RECORDINGS_ON_PAGE = 6;
 const ROLE_LABEL = { admin: "an admin", member: "a member", viewer: "a viewer" };
 
 /// One group's page, opened by tapping it on the Groups screen: its live
@@ -33,11 +38,13 @@ export function GroupSettingsScreen() {
   const { user, updateProfile } = useAuth();
   const { activeGroup, refresh: refreshTheme } = useGroupTheme();
   const navigate = useNavigate();
+  // ?invite=1, right after creating the group: ask to invite the team.
+  const [params, setParams] = useSearchParams();
   const [group, setGroup] = useState(null);
+  // Bumped when someone's let in, so the members list loads again.
+  const [rosterVersion, setRosterVersion] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [primaryError, setPrimaryError] = useState("");
-  const [savingPrimary, setSavingPrimary] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,18 +75,8 @@ export function GroupSettingsScreen() {
   const isPrimary = activeGroup?.id === group.id;
   const yourRole = isOwner ? "the owner" : ROLE_LABEL[group.role] ?? "a member";
 
-  const makePrimary = async () => {
-    setSavingPrimary(true);
-    setPrimaryError("");
-    try {
-      await updateProfile({ primaryGroupId: group.id });
-    } catch (err) {
-      setPrimaryError(err.message);
-    } finally {
-      setSavingPrimary(false);
-    }
-  };
-
+  // The group's page: its banner, then what it records (live, start one,
+  // its sessions) beside who's in it and its settings.
   return (
     <div className="gs-page">
       <style>{css}</style>
@@ -91,63 +88,78 @@ export function GroupSettingsScreen() {
         <div>
           <h1>{group.name}</h1>
           <p>
-            ID {group.id} · {group.isPublic ? "Public" : "Private"} · You're {yourRole}
+            ID {group.id} · You're {yourRole}
           </p>
         </div>
+        {/* Your primary group sets the app's color; it's picked in Settings. */}
+        {isPrimary && (
+          <span className="gs-badge" title="This group sets the app's color. Change it in Settings.">
+            Your primary group
+          </span>
+        )}
       </header>
 
-      <GroupSessions group={group} canManage={canManage} />
+      <div className="gs-columns">
+        <div className="gs-main">
+          <GroupSessions group={group} canManage={canManage} />
+        </div>
 
-      <h2 className="gs-heading">Settings</h2>
+        <aside className="gs-side">
+          {canManage && <RequestsSection group={group} onApproved={() => setRosterVersion((v) => v + 1)} />}
 
-      <section className="gs-card">
-        <h2>Primary group</h2>
-        {isPrimary ? (
-          <p>This is your primary group, so the app uses its color.</p>
-        ) : (
-          <>
-            <p>Your primary group sets the app's color.</p>
-            <button type="button" className="gs-button gs-button-primary"
-              disabled={savingPrimary} onClick={makePrimary}>
-              {savingPrimary ? "Saving..." : `Make ${group.name} my primary group`}
+          <MembersSection key={rosterVersion} group={group} isOwner={isOwner}
+            onTransferred={(updated) => setGroup((current) => ({ ...current, ...updated }))} />
+
+          <section className="gs-card">
+            <h2>Invite people</h2>
+            <p>Anyone with the invite can join: share the link, read out the code, or show the QR.</p>
+            <InviteCard group={group} canReset={canManage}
+              onReset={(updated) => setGroup((current) => ({ ...current, ...updated }))} />
+          </section>
+
+          {canManage && (
+            <TeamColorSection
+              group={group}
+              onSaved={(updated) => {
+                setGroup((current) => ({ ...current, ...updated }));
+                refreshTheme().catch(() => {});
+              }}
+            />
+          )}
+
+          {isOwner ? (
+            <OwnerSection
+              group={group}
+              onSaved={(updated) => setGroup((current) => ({ ...current, ...updated }))}
+              onGone={() => {
+                refreshTheme().catch(() => {});
+                navigate("/groups");
+              }}
+            />
+          ) : (
+            <LeaveSection
+              group={group}
+              onLeft={() => {
+                refreshTheme().catch(() => {});
+                navigate("/groups");
+              }}
+            />
+          )}
+        </aside>
+      </div>
+
+      {params.get("invite") && (
+        <div className="gs-modal-backdrop"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setParams({}, { replace: true }); }}>
+          <div className="gs-modal" role="dialog" aria-modal="true" aria-label="Invite your team">
+            <h2>Invite your team</h2>
+            <p>{group.name} is ready. Send the link to your team's group chat, or have everyone scan the QR.</p>
+            <InviteCard group={group} canReset={false} onReset={() => {}} />
+            <button type="button" className="gs-start-button" onClick={() => setParams({}, { replace: true })}>
+              Done
             </button>
-          </>
-        )}
-        {primaryError && <p role="alert" className="gs-error">{primaryError}</p>}
-      </section>
-
-      {canManage && (
-        <TeamColorSection
-          group={group}
-          onSaved={(updated) => {
-            setGroup((current) => ({ ...current, ...updated }));
-            refreshTheme().catch(() => {});
-          }}
-        />
-      )}
-
-      <InviteSection group={group} />
-
-      <MembersSection group={group} isOwner={isOwner}
-        onTransferred={(updated) => setGroup((current) => ({ ...current, ...updated }))} />
-
-      {isOwner ? (
-        <OwnerSection
-          group={group}
-          onSaved={(updated) => setGroup((current) => ({ ...current, ...updated }))}
-          onGone={() => {
-            refreshTheme().catch(() => {});
-            navigate("/groups");
-          }}
-        />
-      ) : (
-        <LeaveSection
-          group={group}
-          onLeft={() => {
-            refreshTheme().catch(() => {});
-            navigate("/groups");
-          }}
-        />
+          </div>
+        </div>
       )}
     </div>
   );
@@ -158,6 +170,7 @@ export function GroupSettingsScreen() {
 /// finished sessions' recordings, newest first.
 function GroupSessions({ group, canManage }) {
   const navigate = useNavigate();
+  const tile = groupTile(group);
   const [sessions, setSessions] = useState(null);
   const [error, setError] = useState("");
   const [name, setName] = useState("");
@@ -175,7 +188,7 @@ function GroupSessions({ group, canManage }) {
 
   const live = (sessions ?? []).filter((session) => session.status === "active");
   const recordings = (sessions ?? [])
-    .filter((session) => session.status === "complete")
+    .filter((session) => session.status === "complete" && session.recordingCount !== 0)
     .sort((a, b) => new Date(b.scheduledAt) - new Date(a.scheduledAt));
 
   const start = async (event) => {
@@ -185,7 +198,7 @@ function GroupSessions({ group, canManage }) {
     try {
       const session = await createLiveSession({
         groupId: group.id,
-        name: name.trim() || `${group.name} practice`,
+        name: name.trim() || `${group.name} session`,
       });
       navigate(`/record/${session.id}`);
     } catch (err) {
@@ -208,37 +221,37 @@ function GroupSessions({ group, canManage }) {
 
   return (
     <>
-      <section className="gs-card">
-        <h2>Practice</h2>
-        {live.map((session) => (
-          <div key={session.id} className="gs-live">
-            <span className="gs-live-dot" aria-hidden="true" />
-            <span className="gs-live-name">{session.name}</span>
-            <span className="gs-live-meta">
-              {session.activeMemberCount} {session.activeMemberCount === 1 ? "device" : "devices"}
-            </span>
-            <button type="button" className="gs-button gs-button-primary" disabled={busy}
-              onClick={() => join(session)}>
-              {session.isJoined ? "Enter" : "Join"}
-            </button>
-          </div>
-        ))}
-        {live.length === 0 && (canManage ? (
-          <form className="gs-start" onSubmit={start}>
-            <input value={name} maxLength={100} aria-label="Session name"
-              placeholder={`${group.name} practice`}
-              onChange={(event) => setName(event.target.value)} />
-            <button type="submit" className="gs-button gs-button-primary" disabled={busy}>
-              {busy ? "Starting..." : "Start a session"}
-            </button>
-          </form>
-        ) : (
-          <p>Nothing live right now. An admin starts sessions for this group.</p>
-        ))}
-        {error && <p role="alert" className="gs-error">{error}</p>}
-      </section>
+      {live.length > 0 ? (
+        // In this group's color, like its banner, whatever the app's is.
+        <div style={tile ? { "--brand": tile.fill, "--brand-ink": tile.ink } : undefined}>
+        <NowRow count={live.length}>
+          {live.map((session) => (
+            <LiveCard key={session.id} session={session} groupName={group.name}
+              joining={busy}
+              onEnter={() => navigate(`/record/${session.id}`)}
+              onJoin={() => join(session)} />
+          ))}
+        </NowRow>
+        </div>
+      ) : canManage ? (
+        <form className="gs-start" onSubmit={start}>
+          <span>
+            <strong>Start a session</strong>
+            <span>Everyone in {group.name} can join with their phone.</span>
+          </span>
+          <input value={name} maxLength={100} aria-label="Session name"
+            placeholder="Session name"
+            onChange={(event) => setName(event.target.value)} />
+          <button type="submit" className="gs-start-button" disabled={busy}>
+            {busy ? "Starting..." : "Start"}
+          </button>
+        </form>
+      ) : (
+        <p className="gs-quiet">Nothing live right now. An admin starts sessions for this group.</p>
+      )}
+      {error && <p role="alert" className="gs-error">{error}</p>}
 
-      <section className="gs-card">
+      <section>
         {/* The newest few here; View all opens the group's full list. */}
         <div className="gs-section-row">
           <h2>Sessions</h2>
@@ -249,30 +262,30 @@ function GroupSessions({ group, canManage }) {
           )}
         </div>
         {sessions === null && !error ? (
-          <p>Loading...</p>
+          <p className="gs-quiet">Loading...</p>
         ) : recordings.length === 0 ? (
-          <p>No recordings yet. Finished sessions show up here.</p>
+          <p className="gs-quiet">No recordings yet. Finished sessions show up here.</p>
         ) : (
           <ul className="gs-recordings">
             {recordings.slice(0, RECORDINGS_ON_PAGE).map((session) => (
               <li key={session.id}>
                 <Link to={`/watch/${session.id}`}>
-                  <span className="gs-thumb" aria-hidden="true"><span /></span>
-                  <span className="gs-rec-text">
-                    <strong>{session.name}</strong>
-                    <span>
-                      {new Date(session.scheduledAt).toLocaleDateString(undefined, {
-                        month: "short", day: "numeric",
-                      })}
-                      {session.memberCount != null &&
-                        ` · ${session.memberCount} ${session.memberCount === 1 ? "device" : "devices"}`}
-                    </span>
+                  <span className="gs-thumb" aria-hidden="true">
+                    {session.thumbnailUrl && <img src={session.thumbnailUrl} alt="" loading="lazy" />}
+                    {session.recordingCount != null && (
+                      <span className="gs-rec-count">
+                        {session.recordingCount} {session.recordingCount === 1 ? "recording" : "recordings"}
+                      </span>
+                    )}
                   </span>
-                  {session.recordingCount != null && (
-                    <span className="gs-rec-count">
-                      {session.recordingCount} {session.recordingCount === 1 ? "recording" : "recordings"}
-                    </span>
-                  )}
+                  <strong>{session.name}</strong>
+                  <span className="gs-rec-meta">
+                    {new Date(session.scheduledAt).toLocaleDateString(undefined, {
+                      month: "short", day: "numeric",
+                    })}
+                    {session.memberCount != null &&
+                      ` · ${session.memberCount} ${session.memberCount === 1 ? "camera" : "cameras"}`}
+                  </span>
                 </Link>
               </li>
             ))}
@@ -283,19 +296,17 @@ function GroupSessions({ group, canManage }) {
   );
 }
 
-/// The owner's controls: the group's name and privacy, and deleting it.
+/// The owner's controls: the group's name, and deleting it.
 /// Handing the group to someone else is in the Members list.
 function OwnerSection({ group, onSaved, onGone }) {
   const [name, setName] = useState(group.name);
-  const [isPublic, setIsPublic] = useState(group.isPublic);
-  const [password, setPassword] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [dangerError, setDangerError] = useState("");
 
-  const changed = name.trim() !== group.name || isPublic !== group.isPublic || password;
+  const changed = name.trim() !== group.name;
 
   const saveDetails = async (event) => {
     event.preventDefault();
@@ -303,8 +314,7 @@ function OwnerSection({ group, onSaved, onGone }) {
     setSaved(false);
     setError("");
     try {
-      onSaved(await updateGroupDetails(group.id, { name: name.trim(), isPublic, password }));
-      setPassword("");
+      onSaved(await updateGroupDetails(group.id, { name: name.trim() }));
       setSaved(true);
     } catch (err) {
       setError(err.message);
@@ -336,18 +346,6 @@ function OwnerSection({ group, onSaved, onGone }) {
             <input value={name} maxLength={100} required
               onChange={(event) => { setName(event.target.value); setSaved(false); }} />
           </label>
-          <label className="gs-check">
-            <input type="checkbox" checked={!isPublic}
-              onChange={(event) => { setIsPublic(!event.target.checked); setSaved(false); }} />
-            Private: people need a password to join
-          </label>
-          {!isPublic && (
-            <label>
-              {group.isPublic ? "Password" : "New password (leave blank to keep the current one)"}
-              <input type="password" value={password} required={group.isPublic}
-                onChange={(event) => { setPassword(event.target.value); setSaved(false); }} />
-            </label>
-          )}
           {error && <p role="alert" className="gs-error">{error}</p>}
           <div className="gs-actions">
             {saved && !changed && <span className="gs-saved">Saved</span>}
@@ -370,43 +368,54 @@ function OwnerSection({ group, onSaved, onGone }) {
   );
 }
 
-/// The group's invite link, to copy or (where the browser can) share.
-function InviteSection({ group }) {
-  const [copied, setCopied] = useState(false);
-  const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
-  const message = `Join ${group.name} on 8kount`;
+/// People asking to join by the group's ID, for its admins to let in or
+/// turn away. Hidden when nobody's waiting.
+function RequestsSection({ group, onApproved }) {
+  const [requests, setRequests] = useState([]);
+  const [busyId, setBusyId] = useState(null);
+  const [error, setError] = useState("");
 
-  const copy = async () => {
+  useEffect(() => {
+    let cancelled = false;
+    getJoinRequests(group.id)
+      .then((loaded) => { if (!cancelled) setRequests(loaded); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [group.id]);
+
+  const answer = async (request, approve) => {
+    setBusyId(request.userId);
+    setError("");
     try {
-      await navigator.clipboard.writeText(group.inviteUrl);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      window.prompt("Copy this invite link:", group.inviteUrl);
+      await (approve ? approveJoinRequest : declineJoinRequest)(group.id, request.userId);
+      setRequests((current) => current.filter((item) => item.userId !== request.userId));
+      if (approve) onApproved();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusyId(null);
     }
   };
 
-  const share = () => {
-    navigator.share({ title: message, text: message, url: group.inviteUrl }).catch(() => {});
-  };
-
+  if (requests.length === 0) return null;
   return (
     <section className="gs-card">
-      <h2>Invite people</h2>
-      <p>
-        Anyone with this link can join
-        {group.isPublic ? "." : " once they enter the group password."}
-      </p>
-      <div className="gs-inline">
-        <input className="gs-invite-link" value={group.inviteUrl} readOnly
-          aria-label="Invite link" onFocus={(event) => event.target.select()} />
-        <button type="button" className="gs-button gs-button-primary" onClick={copy}>
-          {copied ? "Copied" : "Copy link"}
-        </button>
-        {canShare && (
-          <button type="button" className="gs-button" onClick={share}>Share</button>
-        )}
-      </div>
+      <h2>Requests to join ({requests.length})</h2>
+      {error && <p role="alert" className="gs-error">{error}</p>}
+      <ul className="gs-requests">
+        {requests.map((request) => (
+          <li key={request.userId}>
+            <span>
+              <strong>{request.name}</strong>
+              <small>{request.email} · {new Date(request.requestedAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</small>
+            </span>
+            <button type="button" className="gs-button" disabled={busyId !== null}
+              onClick={() => answer(request, false)}>Decline</button>
+            <button type="button" className="gs-button gs-button-primary" disabled={busyId !== null}
+              onClick={() => answer(request, true)}>Let in</button>
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
@@ -416,7 +425,7 @@ function LeaveSection({ group, onLeft }) {
   const [error, setError] = useState("");
 
   const leave = async () => {
-    if (!window.confirm(`Leave ${group.name}? You'll need its ID${group.isPublic ? "" : " and password"} to join again.`)) return;
+    if (!window.confirm(`Leave ${group.name}? You'll need a new invite to join again.`)) return;
     setLeaving(true);
     setError("");
     try {
@@ -597,27 +606,35 @@ function MembersSection({ group, isOwner, onTransferred }) {
 }
 
 const css = `
-  .gs-page { max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
-  .gs-back { color: var(--accent); align-self: flex-start; }
-  .gs-banner {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: 22px 24px; border-radius: 12px; background: #242424; color: #f0f0f0;
+  .gs-page { max-width: 1480px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+  .gs-back {
+    align-self: flex-start; padding: 8px 14px; border-radius: 999px; background: #1b1b1e;
+    color: #f0f0f0; font-size: 0.85rem; font-weight: 600; text-decoration: none;
   }
-  .gs-banner h1 { margin: 0 0 6px; font-size: 1.8rem; overflow-wrap: anywhere; }
-  .gs-banner p { margin: 0; opacity: 0.8; font-size: 0.9rem; }
-  .gs-card { padding: 18px 20px; border-radius: 14px; background: #151515; }
-  .gs-card h2 { margin: 0 0 8px; font-size: 1.1rem; }
+  .gs-back:hover { background: #26262a; }
+  .gs-banner {
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+    min-height: 150px; box-sizing: border-box; padding: 26px 28px; border-radius: 24px; background: #242424; color: #f0f0f0;
+  }
+  .gs-banner h1 { margin: 0 0 6px; font-size: 2.4rem; font-weight: 800; letter-spacing: -0.5px; overflow-wrap: anywhere; }
+  .gs-banner p { margin: 0; opacity: 0.8; font-size: 0.92rem; font-weight: 500; }
+  .gs-badge { flex: 0 0 auto; padding: 8px 14px; border-radius: 999px; background: rgba(0,0,0,0.18); font-size: 0.82rem; font-weight: 700; }
+  /* What the group records beside who's in it and its settings. */
+  .gs-columns { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 32px; align-items: start; }
+  .gs-main, .gs-side { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+  .gs-main h2 { margin: 0; font-size: 1.15rem; font-weight: 700; }
+  .gs-quiet { margin: 0; color: #8a8a8a; font-size: 0.95rem; }
+  .gs-card { padding: 18px 20px; border-radius: 18px; background: #111113; }
+  .gs-card h2 { margin: 0 0 8px; font-size: 1.05rem; }
   .gs-card p { margin: 0 0 12px; color: #aaa; font-size: 0.9rem; line-height: 1.5; }
   .gs-button {
-    padding: 8px 14px; border: 1px solid #3a3a3a; border-radius: 7px;
+    padding: 8px 16px; border: 1px solid #3a3a3a; border-radius: 999px;
     background: #262626; color: #f0f0f0; font: inherit; font-weight: 600; cursor: pointer;
   }
   .gs-button:hover { background: #303030; }
   .gs-button:disabled { opacity: 0.5; cursor: default; }
   .gs-button-primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
   .gs-button-primary:hover { background: var(--accent-hover); }
-  .gs-on-banner { flex: 0 0 auto; border-color: rgba(0,0,0,0.25); background: rgba(0,0,0,0.18); color: inherit; }
-  .gs-on-banner:hover { background: rgba(0,0,0,0.3); }
   .gs-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; }
   .gs-saved { color: #8bd48b; font-size: 0.85rem; }
   .gs-error { color: #ff8a80 !important; }
@@ -627,15 +644,8 @@ const css = `
     box-sizing: border-box; padding: 8px 10px; border: 1px solid #3a3a3a; border-radius: 7px;
     background: #262626; color: #f0f0f0; font: inherit;
   }
-  .gs-form .gs-check { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
-  .gs-check input { accent-color: var(--accent); width: 16px; height: 16px; }
   .gs-inline { display: flex; flex-wrap: wrap; gap: 10px; }
   .gs-inline select { flex: 1; min-width: 180px; }
-  .gs-invite-link {
-    flex: 1; min-width: 200px; box-sizing: border-box; padding: 8px 10px;
-    border: 1px solid #3a3a3a; border-radius: 7px; background: #262626;
-    color: #f0f0f0; font: inherit; font-size: 0.85rem;
-  }
   .gs-spaced { margin-top: 18px !important; }
   .gs-button-danger { border-color: #5a2a2a; background: #2a1414; color: #ff8a80; }
   .gs-button-danger:hover { background: #3a1a1a; }
@@ -662,35 +672,70 @@ const css = `
   }
   .gs-remove:hover { background: rgba(229, 72, 77, 0.15); }
   .gs-remove:disabled { opacity: 0.5; cursor: default; }
-  .gs-section-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .gs-section-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
   .gs-card .gs-section-row h2 { margin: 0; }
   .gs-view-all { color: var(--accent); font-size: 0.9rem; font-weight: 600; text-decoration: none; }
   .gs-view-all:hover { text-decoration: underline; }
   .gs-heading { margin: 10px 0 -4px; color: #999; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
-  .gs-live { display: flex; align-items: center; gap: 10px; padding: 6px 0 12px; }
-  .gs-live-dot { width: 9px; height: 9px; border-radius: 50%; background: #f0432e; }
-  .gs-live-name { flex: 1; min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
-  .gs-live-meta { color: #999; font-size: 0.85rem; }
-  .gs-start { display: flex; flex-wrap: wrap; gap: 10px; }
+  /* Starting a session: a card with the name and a big Start. */
+  .gs-start {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;
+    padding: 20px 22px; border-radius: 22px; background: #111113;
+  }
+  .gs-start > span { flex: 1 1 220px; display: flex; flex-direction: column; gap: 3px; }
+  .gs-start > span strong { font-size: 1.15rem; }
+  .gs-start > span span { color: #8a8a8a; font-size: 0.88rem; }
   .gs-start input {
-    flex: 1; min-width: 180px; box-sizing: border-box; padding: 8px 10px;
-    border: 1px solid #3a3a3a; border-radius: 7px; background: #262626; color: #f0f0f0; font: inherit;
+    flex: 1 1 220px; min-width: 0; box-sizing: border-box; height: 46px; padding: 0 16px;
+    border: 1px solid #2e2e32; border-radius: 23px; background: #1b1b1e; color: #f0f0f0; font: inherit;
   }
-  .gs-recordings { margin: 0; padding: 0; list-style: none; }
-  .gs-recordings li + li { border-top: 1px solid rgba(255,255,255,0.05); }
-  .gs-recordings a {
-    display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; align-items: center; gap: 14px;
-    padding: 9px 4px; border-radius: 9px; color: #f0f0f0; text-decoration: none;
+  .gs-start-button {
+    height: 46px; padding: 0 28px; border: none; border-radius: 23px;
+    background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 700; cursor: pointer;
   }
-  .gs-recordings a:hover { background: #1e1e1e; }
-  .gs-thumb { display: flex; align-items: center; justify-content: center; height: 38px; border-radius: 7px; background: #0a0b0d; }
-  .gs-thumb span { width: 15px; height: 15px; border-radius: 50%; background: var(--accent); }
-  .gs-rec-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .gs-rec-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .gs-rec-text span { color: #8a8a8a; font-size: 0.8rem; }
-  .gs-rec-count { color: #8a8a8a; font-size: 0.85rem; white-space: nowrap; }
+  .gs-start-button:disabled { opacity: 0.6; cursor: default; }
+  /* The group's sessions as video cards. */
+  .gs-recordings {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 22px 16px;
+    margin: 0; padding: 0; list-style: none;
+  }
+  .gs-recordings a { display: flex; flex-direction: column; gap: 4px; color: #f0f0f0; text-decoration: none; }
+  .gs-thumb {
+    position: relative; display: block; aspect-ratio: 16 / 9; margin-bottom: 6px;
+    border-radius: 12px; background: #161616; overflow: hidden;
+  }
+  .gs-thumb img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.2s; }
+  .gs-recordings a:hover .gs-thumb img { transform: scale(1.04); }
+  .gs-recordings a:hover strong { color: var(--accent); }
+  .gs-recordings strong { line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .gs-rec-count {
+    position: absolute; right: 8px; bottom: 8px; padding: 2px 8px; border-radius: 6px;
+    background: rgba(0,0,0,0.75); color: #fff; font-size: 0.78rem; font-weight: 600;
+  }
+  .gs-rec-meta { color: #8a8a8a; font-size: 0.85rem; }
+  .gs-requests { margin: 0; padding: 0; list-style: none; }
+  .gs-requests li { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid rgba(255,255,255,0.05); }
+  .gs-requests li:first-child { border-top: none; }
+  .gs-requests span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .gs-requests strong, .gs-requests small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .gs-requests small { color: #8a8a8a; font-size: 0.78rem; }
+  .gs-modal-backdrop {
+    position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center;
+    padding: 16px; background: rgba(0,0,0,0.7);
+  }
+  .gs-modal {
+    width: min(440px, 100%); max-height: calc(100vh - 32px); overflow: auto; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 14px; padding: 24px; border-radius: 24px; background: #111113;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+  }
+  .gs-modal h2 { margin: 0; font-size: 1.4rem; font-weight: 800; }
+  .gs-modal p { margin: 0; color: #aaa; line-height: 1.5; }
   .gs-pages { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; font-size: 0.85rem; }
+  @media (max-width: 1080px) {
+    .gs-columns { grid-template-columns: minmax(0, 1fr); }
+  }
   @media (max-width: 600px) {
     .gs-banner { flex-direction: column; align-items: flex-start; }
+    .gs-banner h1 { font-size: 1.8rem; }
   }
 `;

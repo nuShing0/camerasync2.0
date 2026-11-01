@@ -11,13 +11,14 @@ const WINDOW_DAYS = 30;
 
 // The feed is read straight from what already happened in the user's groups
 // rather than written to a table of its own: a comment on a recording
-// (session_notes), someone joining (group_members.joined_at) and a practice
-// going live (its first recording_session_members row, which is whoever
-// started it). Only other people's actions, from the user's own join onward,
+// (session_notes), someone joining (group_members.joined_at), someone asking
+// to join (group_join_requests, for the group's admins only, while it waits)
+// and a practice going live (its first recording_session_members row, which
+// is whoever started it). Only other people's actions, from the user's own join onward,
 // over the last 30 days. Deleting a comment drops it from the feed too.
 const FEED_SQL = `
   WITH mine AS (
-    SELECT gm.group_id, gm.joined_at
+    SELECT gm.group_id, gm.joined_at, gm.role
       FROM group_members gm
      WHERE gm.user_id = $1
   ),
@@ -47,6 +48,15 @@ const FEED_SQL = `
       JOIN mine ON mine.group_id = gm.group_id
      WHERE gm.user_id <> $1
        AND gm.joined_at > mine.joined_at
+
+    UNION ALL
+
+    SELECT 'request', 'request-' || r.group_id || '-' || r.user_id,
+           r.requested_at, r.user_id, r.group_id,
+           NULL, NULL, NULL, NULL, NULL
+      FROM group_join_requests r
+      JOIN mine ON mine.group_id = r.group_id
+     WHERE mine.role = 'admin'
 
     UNION ALL
 
@@ -112,9 +122,11 @@ function publicNotification(row, seenAt) {
 const TYPE_OF_KIND = { comments: "comment", joins: "join", sessions: "session" };
 
 function shownTypes(prefs) {
-  return Object.entries(TYPE_OF_KIND)
+  const types = Object.entries(TYPE_OF_KIND)
     .filter(([kind]) => prefs?.[kind] !== false)
     .map(([, type]) => type);
+  // Requests to join go with the joins switch.
+  return types.includes("join") ? [...types, "request"] : types;
 }
 
 async function seenAtFor(userId) {

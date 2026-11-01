@@ -37,21 +37,68 @@ export async function createGroup(group) {
   return data.group;
 }
 
-// Rename the group or change its privacy and password (owner only). A
-// private group needs a password unless it already has one.
-export async function updateGroupDetails(id, { name, isPublic, password }) {
+// Rename the group (owner only).
+export async function updateGroupDetails(id, { name }) {
   const data = await request(`/api/groups/${encodeURIComponent(id)}`, {
     method: "PATCH",
-    body: JSON.stringify({ name, isPublic, ...(password ? { password } : {}) }),
+    body: JSON.stringify({ name }),
   });
   return data.group;
 }
 
-// What an invite link shows before joining: name, color, and whether the
-// group needs a password.
-export async function getGroupInvite(id) {
-  const data = await request(`/api/groups/${encodeURIComponent(id)}/invite`);
+// The invite code in what someone typed or pasted: a bare code (ABC-DEF, any
+// case) or a link ending in /join/<code>. "" when there's nothing to try.
+export function inviteCodeFrom(text) {
+  const trimmed = String(text ?? "").trim();
+  const fromLink = trimmed.match(/\/join\/([A-Za-z0-9-]+)/);
+  return (fromLink ? fromLink[1] : trimmed).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+}
+
+// ABCDEF as ABC-DEF, how codes are shown and read out.
+export function formatInviteCode(code) {
+  return code && code.length === 6 ? `${code.slice(0, 3)}-${code.slice(3)}` : code ?? "";
+}
+
+// What an invite shows before joining: the group's name, color and size, and
+// whether you're in it.
+export async function getInvite(code) {
+  const data = await request(`/api/groups/invites/${encodeURIComponent(code)}`);
   return data.group;
+}
+
+// Join a group with its invite code.
+export async function joinWithInvite(code) {
+  const data = await request(`/api/groups/invites/${encodeURIComponent(code)}/join`, { method: "POST" });
+  return data.group;
+}
+
+// A new invite for the group (admins); the old code, link and QR stop working.
+export async function resetInvite(id) {
+  const data = await request(`/api/groups/${encodeURIComponent(id)}/invite/reset`, { method: "POST" });
+  return data.group;
+}
+
+// Ask to join a group by its exact ID. Resolves {status: "requested" |
+// "member", group: {id, name}}.
+export async function requestToJoin(groupId) {
+  return request("/api/groups/requests", {
+    method: "POST",
+    body: JSON.stringify({ groupId }),
+  });
+}
+
+// The group's waiting requests to join (admins).
+export async function getJoinRequests(id) {
+  const data = await request(`/api/groups/${encodeURIComponent(id)}/requests`);
+  return data.requests;
+}
+
+export async function approveJoinRequest(id, userId) {
+  await request(`/api/groups/${encodeURIComponent(id)}/requests/${userId}/approve`, { method: "POST" });
+}
+
+export async function declineJoinRequest(id, userId) {
+  await request(`/api/groups/${encodeURIComponent(id)}/requests/${userId}`, { method: "DELETE" });
 }
 
 // Leave a group. The owner has to hand it to someone else first.
@@ -78,23 +125,6 @@ export async function updateGroupColor(id, primaryColor) {
   const data = await request(`/api/groups/${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify({ primaryColor }),
-  });
-  return data.group;
-}
-
-//search for groups by ID
-export async function searchGroups(query) {
-  const data = await request(
-    `/api/groups/search?q=${encodeURIComponent(query)}`
-  );
-  return data.groups;
-}
-
-//join a public or private group
-export async function joinGroup(id, password = "") {
-  const data = await request(`/api/groups/${encodeURIComponent(id)}/join`, {
-    method: "POST",
-    body: JSON.stringify({ password }),
   });
   return data.group;
 }
