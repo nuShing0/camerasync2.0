@@ -75,6 +75,8 @@ function publicSession(row) {
     totalRecordings: row.total_recordings == null ? null : Number(row.total_recordings),
     recordingCount: row.recording_count == null ? null : Number(row.recording_count),
     activeMemberCount: Number(row.active_member_count ?? 0),
+    // Who's in the session now, earliest first, for Home's live card.
+    activeMemberNames: row.active_member_names ?? [],
     isJoined: Boolean(row.is_joined),
     // A still from the session's first take, for the session lists.
     thumbnailUrl: row.thumbnail_file_id ? fileUrl(row.thumbnail_file_id) : null,
@@ -124,6 +126,13 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
                   FROM recording_session_members rsm
                  WHERE rsm.session_id = rs.id
               ) AS active_member_count,
+              (
+                SELECT ARRAY_AGG(COALESCE(u.display_name, SPLIT_PART(u.email, '@', 1))
+                                 ORDER BY rsm.joined_at)
+                  FROM recording_session_members rsm
+                  JOIN users u ON u.user_id = rsm.user_id
+                 WHERE rsm.session_id = rs.id
+              ) AS active_member_names,
               EXISTS (
                 SELECT 1
                   FROM recording_session_members rsm

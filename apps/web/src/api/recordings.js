@@ -128,8 +128,9 @@ export function sessionDownloadUrl(id) {
 // dropped upload carries on from what reached the server: pass the same
 // `resume` object again ({} the first time; it remembers the upload). A
 // server without resumable uploads gets the whole file in one request.
+// `onProgress` hears how much has gone, 0 to 1, as it goes.
 export async function uploadSessionVideo(
-  id, startedAt, video, filename, actualStartedAt, startClock, signal, resume = {}
+  id, startedAt, video, filename, actualStartedAt, startClock, signal, resume = {}, onProgress = null
 ) {
   const actual = Number.isFinite(actualStartedAt)
     ? `&actualStartedAt=${Math.round(actualStartedAt)}${startClock ? `&startClock=${startClock}` : ""}`
@@ -139,6 +140,7 @@ export async function uploadSessionVideo(
   // The bars viewers see, every few seconds.
   let reportedAt = 0;
   const report = (sent) => {
+    onProgress?.(sent / video.size);
     if (Date.now() - reportedAt < PROGRESS_EVERY_MS) return;
     reportedAt = Date.now();
     reportUploadProgress(id, startedAt, "full", sent / video.size).catch(() => {});
