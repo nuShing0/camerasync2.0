@@ -140,3 +140,16 @@ describe("POST /api/groups (team color)", () => {
     expect(rejected.status).toBe(400);
   });
 });
+
+describe("POST /api/groups (IDs)", () => {
+  it("makes the ID from the name when none is sent", async () => {
+    const created = await request(app)
+      .post("/api/groups")
+      .set("Cookie", owner)
+      .send({ name: "Dance Team!" });
+    expect(created.status).toBe(201);
+    const { id } = created.body.group;
+    expect(id).toMatch(/^danceteam[a-z0-9]{3}$/);
+    await pool.query("DELETE FROM groups WHERE group_id = $1", [id]);
+  });
+});

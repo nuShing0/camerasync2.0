@@ -14,8 +14,8 @@ import { DEFAULT_TEAM_COLOR } from "../theme/teamColors.js";
 // Shells for the sections that don't have backing APIs yet. Each states what
 // it will hold so the nav is honest about what's built vs. planned.
 
-// One group on the Groups list: a card in its team color with its name and
-// ID, your role, and what's going on (live now, or its sessions and when the
+// One group on the Groups list: a card in its team color with its name,
+// your role, and what's going on (live now, or its sessions and when the
 // last one was). The whole card opens the group's page; drag to reorder.
 function GroupTile({ group, isPrimary, dragging, dragHandlers, sessions }) {
   const navigate = useNavigate();
@@ -43,7 +43,6 @@ function GroupTile({ group, isPrimary, dragging, dragHandlers, sessions }) {
         <span className="group-card-grip" aria-hidden="true" title="Drag to reorder">⠿</span>
       </span>
       <span className="group-card-name">{group.name}</span>
-      <span className="group-card-id">{group.id}</span>
       <span className="group-card-foot">
         {live ? (
           <span className="group-card-live"><span />Live · {live.name}</span>
@@ -112,7 +111,6 @@ export function GroupsScreen() {
   const navigate = useNavigate();
   const [form, setForm] = useState({
     name: "",
-    id: "",
     primaryColor: DEFAULT_TEAM_COLOR,
   });
 
@@ -251,23 +249,6 @@ export function GroupsScreen() {
               />
             </label>
 
-            <label className="group-field">
-              ID
-              <input
-                type="text"
-                pattern="[A-Za-z0-9]+"
-                value={form.id}
-                placeholder="Letters and numbers only"
-                onChange={(event) =>
-                  updateForm(
-                    "id",
-                    event.target.value.replace(/[^a-zA-Z0-9]/g, "")
-                  )
-                }
-                required
-              />
-            </label>
-
             <div className="group-field">
               Team color
               <TeamColorPicker
@@ -367,7 +348,6 @@ const groupsCss = `
   .group-card-grip { margin-left: auto; opacity: 0.5; font-size: 1.1rem; line-height: 1; cursor: grab; }
   .group-card:hover .group-card-grip { opacity: 0.9; }
   .group-card-name { margin-top: 18px; font-size: 1.5rem; font-weight: 800; letter-spacing: -0.3px; line-height: 1.15; overflow-wrap: anywhere; }
-  .group-card-id { opacity: 0.7; font-size: 0.82rem; font-weight: 500; overflow-wrap: anywhere; }
   .group-card-foot {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(127,127,127,0.3);

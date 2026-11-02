@@ -6,8 +6,8 @@ import '../api/groups_api.dart';
 import '../team_accent.dart';
 import '../theme.dart';
 
-/// The "new group" overlay from the Create A Group design: name, ID and a
-/// team color. Groups are invite-only, so there's no privacy to pick. Pops
+/// The "new group" overlay from the Create A Group design: a name and a
+/// team color (the server makes the group's ID from the name). Groups are invite-only, so there's no privacy to pick. Pops
 /// with the created [Group], or null if cancelled.
 class CreateGroupDialog extends StatefulWidget {
   const CreateGroupDialog({super.key, required this.groupsApi});
@@ -20,7 +20,6 @@ class CreateGroupDialog extends StatefulWidget {
 
 class _CreateGroupDialogState extends State<CreateGroupDialog> {
   final _name = TextEditingController();
-  final _id = TextEditingController();
   String _color = kTeamColors.first.$2;
   bool _submitting = false;
   String? _error;
@@ -28,13 +27,11 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
   @override
   void dispose() {
     _name.dispose();
-    _id.dispose();
     super.dispose();
   }
 
   String? _validate() {
     if (_name.text.trim().isEmpty) return 'Please enter a group name.';
-    if (_id.text.isEmpty) return 'Please choose a group ID.';
     return null;
   }
 
@@ -51,7 +48,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
     });
     try {
       final group = await widget.groupsApi.createGroup(
-        id: _id.text,
         name: _name.text.trim(),
         primaryColor: _color,
       );
@@ -104,16 +100,6 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
               label: 'Group Name',
               controller: _name,
               hint: 'Team Knightro',
-            ),
-            _field(
-              label: 'Group ID',
-              controller: _id,
-              hint: 'Letters and numbers only',
-              // People can ask to join by this ID, so it's restricted to
-              // what the server accepts instead of failing on submit.
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp('[A-Za-z0-9]')),
-              ],
             ),
             const SizedBox(height: 4),
             const Text(

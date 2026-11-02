@@ -35,12 +35,13 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.groups));
     await tester.pumpAndSettle();
-    expect(find.text('My groups'), findsOneWidget);
+    expect(find.text('Join group'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.video_library_outlined));
     await tester.pumpAndSettle();
-    expect(find.text('Live & upcoming'), findsOneWidget);
-    expect(find.text('Past'), findsOneWidget);
+    // One page now: live sessions and Past, searchable, no switch.
+    expect(find.text('Search sessions'), findsOneWidget);
+    expect(find.text('Live & upcoming'), findsNothing);
   });
 
   testWidgets('+ opens the new session menu', (tester) async {

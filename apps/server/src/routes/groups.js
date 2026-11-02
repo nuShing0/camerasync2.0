@@ -400,16 +400,33 @@ async function changeMember(req, res) {
 groupRouter.patch("/:id/members/:memberId", changeMember);
 groupRouter.delete("/:id/members/:memberId", changeMember);
 
-//create a group and make its owner an admin
+// A group's ID when its creator doesn't pick one: its name in lowercase
+// letters and numbers, then three random characters so names can repeat
+// ("Dance Team" → danceteam7k2). People only see it when asking to join.
+async function freeGroupId(name) {
+  const base = name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16) || "group";
+  for (let tries = 0; tries < 10; tries += 1) {
+    const suffix = Array.from({ length: 3 },
+      () => "abcdefghjkmnpqrstuvwxyz23456789"[crypto.randomInt(31)]).join("");
+    const candidate = `${base}${suffix}`;
+    const { rowCount } = await pool.query(
+      "SELECT 1 FROM groups WHERE LOWER(group_id) = $1", [candidate]);
+    if (rowCount === 0) return candidate;
+  }
+  throw new Error("No free group ID.");
+}
+
+//create a group and make its owner an admin. The ID is made from the name
+//unless one is sent (older apps still ask people to pick one).
 groupRouter.post("/", async (req, res) => {
-  const id = String(req.body?.id ?? "").trim();
+  let id = String(req.body?.id ?? "").trim();
   const name = String(req.body?.name ?? "").trim();
   const primaryColor = teamColor(req.body?.primaryColor ?? DEFAULT_TEAM_COLOR);
 
   if (!name) {
     return res.status(400).json({ error: "Group name is required." });
   }
-  if (!id || !GROUP_ID_PATTERN.test(id)) {
+  if (id && !GROUP_ID_PATTERN.test(id)) {
     return res.status(400).json({
       error: "Group ID must contain only letters and numbers.",
     });
@@ -421,6 +438,7 @@ groupRouter.post("/", async (req, res) => {
   //save the group and owner membership together
   let client;
   try {
+    if (!id) id = await freeGroupId(name);
     client = await pool.connect();
     await client.query("BEGIN");
 

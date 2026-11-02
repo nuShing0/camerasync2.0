@@ -136,13 +136,12 @@ class GroupsApi {
   /// Create a group; the server makes the creator its owner and admin, and
   /// gives it an invite. [id] must be letters and numbers only (checked
   /// server-side too, see POST /api/groups).
+  /// The server makes the group's ID from its name.
   Future<Group> createGroup({
-    required String id,
     required String name,
     String primaryColor = '#ead217',
   }) async {
     final data = await _api.post('/api/groups', {
-      'id': id,
       'name': name,
       'primaryColor': primaryColor,
     });

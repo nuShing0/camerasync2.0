@@ -88,7 +88,7 @@ export function GroupSettingsScreen() {
         <div>
           <h1>{group.name}</h1>
           <p>
-            ID {group.id} · You're {yourRole}
+            You're {yourRole}
           </p>
         </div>
         {/* Your primary group sets the app's color; it's picked in Settings. */}
@@ -115,6 +115,11 @@ export function GroupSettingsScreen() {
             <p>Anyone with the invite can join: share the link, read out the code, or show the QR.</p>
             <InviteCard group={group} canReset={canManage}
               onReset={(updated) => setGroup((current) => ({ ...current, ...updated }))} />
+            {/* The ID is only for this now: someone without an invite asks
+                to join with it, and an admin lets them in. */}
+            <p className="gs-id-note">
+              No invite? People can ask to join with the group ID <code>{group.id}</code>.
+            </p>
           </section>
 
           {canManage && (
@@ -713,6 +718,8 @@ const css = `
     background: rgba(0,0,0,0.75); color: #fff; font-size: 0.78rem; font-weight: 600;
   }
   .gs-rec-meta { color: #8a8a8a; font-size: 0.85rem; }
+  .gs-card .gs-id-note { margin: 14px 0 0; font-size: 0.82rem; }
+  .gs-id-note code { color: #e8e8e8; }
   .gs-requests { margin: 0; padding: 0; list-style: none; }
   .gs-requests li { display: flex; align-items: center; gap: 8px; padding: 10px 0; border-top: 1px solid rgba(255,255,255,0.05); }
   .gs-requests li:first-child { border-top: none; }
