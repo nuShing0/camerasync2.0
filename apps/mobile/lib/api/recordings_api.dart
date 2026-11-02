@@ -13,6 +13,7 @@ class RecordingSession {
     required this.status,
     required this.activeMemberCount,
     required this.isJoined,
+    this.activeMemberNames = const [],
     this.groupId,
     this.scheduledAt,
     this.memberCount,
@@ -27,6 +28,10 @@ class RecordingSession {
   final String status;
   final int activeMemberCount;
   final bool isJoined;
+
+  /// Who's in the session now, earliest first (for the live card's
+  /// initials). Empty from servers that don't send it.
+  final List<String> activeMemberNames;
   final String? groupId;
   final DateTime? scheduledAt;
 
@@ -59,6 +64,10 @@ class RecordingSession {
         status: (json['status'] ?? '').toString(),
         activeMemberCount: (json['activeMemberCount'] as num?)?.toInt() ?? 0,
         isJoined: json['isJoined'] == true,
+        activeMemberNames: [
+          for (final name in json['activeMemberNames'] as List? ?? const [])
+            name.toString(),
+        ],
         groupId: json['groupId']?.toString(),
         scheduledAt: json['scheduledAt'] == null
             ? null

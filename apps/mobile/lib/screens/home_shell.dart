@@ -40,9 +40,6 @@ class _HomeShellState extends State<HomeShell>
     with SingleTickerProviderStateMixin {
   int _index = _home;
 
-  /// Which half of the Sessions tab shows: 0 live & upcoming, 1 past.
-  final _sessionsSegment = ValueNotifier<int>(1);
-
   /// Ticks when the + menu starts or schedules a session.
   final _sessionsChanged = ValueNotifier<int>(0);
 
@@ -102,7 +99,6 @@ class _HomeShellState extends State<HomeShell>
     InviteLinks.instance.pending.removeListener(_showInvite);
     _menu.dispose();
     _alerts.stop();
-    _sessionsSegment.dispose();
     _sessionsChanged.dispose();
     _groupsChanged.dispose();
     super.dispose();
@@ -115,10 +111,7 @@ class _HomeShellState extends State<HomeShell>
     TvLink.instance.suppressed = isBigScreen(MediaQuery.sizeOf(context));
   }
 
-  void _openSessions({required bool upcoming}) {
-    _sessionsSegment.value = upcoming ? 0 : 1;
-    setState(() => _index = _sessions);
-  }
+  void _openSessions() => setState(() => _index = _sessions);
 
   void _openSettings() {
     Navigator.of(context).push(MaterialPageRoute(
@@ -149,7 +142,6 @@ class _HomeShellState extends State<HomeShell>
       const SizedBox.shrink(), // the + button's slot
       SessionsTab(
         auth: widget.auth,
-        segment: _sessionsSegment,
         refresh: _sessionsChanged,
       ),
       CalendarTab(auth: widget.auth),

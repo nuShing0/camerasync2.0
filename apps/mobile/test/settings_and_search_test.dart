@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:camerasync_mobile/api/api_client.dart';
 import 'package:camerasync_mobile/api/groups_api.dart';
 import 'package:camerasync_mobile/auth/auth_service.dart';
+import 'package:camerasync_mobile/screens/group_settings_screen.dart';
 import 'package:camerasync_mobile/screens/groups_screen.dart';
 import 'package:camerasync_mobile/screens/settings_tab.dart';
 import 'package:camerasync_mobile/screens/watch_screen.dart';
@@ -118,8 +119,7 @@ void main() {
           'status': 'requested',
           'group': {'id': 'UCFCheer', 'name': 'UCF Cheer'},
         };
-      } else if (path.endsWith('/members') ||
-          path.endsWith('/requests')) {
+      } else if (path.endsWith('/members') || path.endsWith('/requests')) {
         body = {'members': [], 'requests': []};
       } else if (path == '/api/recordings/sessions') {
         body = {'sessions': []};
@@ -168,7 +168,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
   }
 
-  Finder inviteField() => find.widgetWithText(TextField, 'Enter a code or paste a link');
+  Finder inviteField() =>
+      find.widgetWithText(TextField, 'Enter a code or paste a link');
 
   Future<void> openGroups(WidgetTester tester) async {
     tester.view.physicalSize = const Size(1080, 4000);
@@ -180,6 +181,9 @@ void main() {
           MaterialApp(home: Scaffold(body: GroupsScreen(auth: auth))));
     });
     await settle(tester);
+    // The invite field and asking by ID are behind Join group.
+    await tester.tap(find.text('Join group'));
+    await tester.pumpAndSettle();
   }
 
   testWidgets('a pasted invite link shows the group, and Join joins it',
@@ -218,7 +222,9 @@ void main() {
       });
     }
     await settle(tester);
-    expect(find.text('Group'), findsOneWidget);
+    // The join screen has gone, and the new group's page is open.
+    expect(inviteField(), findsNothing);
+    expect(find.byType(GroupSettingsScreen), findsOneWidget);
   });
 
   testWidgets('a code for a group you are in offers to open it',

@@ -24,12 +24,13 @@ class _FakeApi extends ApiClient {
     if (path != '/api/groups') {
       throw ApiException(404, 'Unexpected call to $path');
     }
-    if (body!['id'] == 'taken') {
-      throw ApiException(409, 'That group ID already exists.');
+    if (body!['name'] == 'Broken') {
+      throw ApiException(500, 'Unable to create group.');
     }
     created.add(body);
+    // The server makes the ID from the name.
     final group = {
-      'id': body['id'],
+      'id': '${(body['name'] as String).toLowerCase().replaceAll(RegExp('[^a-z0-9]'), '')}k7q',
       'name': body['name'],
       'role': 'admin',
       'inviteCode': 'K7Q2MX',
@@ -53,7 +54,9 @@ void main() {
   }
 
   Finder field(String label) => find.descendant(
-        of: find.ancestor(of: find.text(label), matching: find.byType(Column)).first,
+        of: find
+            .ancestor(of: find.text(label), matching: find.byType(Column))
+            .first,
         matching: find.byType(TextField),
       );
 
@@ -65,6 +68,9 @@ void main() {
 
     expect(find.text('No groups yet'), findsOneWidget);
     expect(find.text('Create a group'), findsOneWidget);
+    // And the pill at the top, beside Join group.
+    expect(find.text('Create group'), findsOneWidget);
+    expect(find.text('Join group'), findsOneWidget);
   });
 
   testWidgets('creates a group, shows its invite, and lists it',
@@ -72,12 +78,10 @@ void main() {
     final api = await openDialog(tester);
 
     await tester.enterText(field('Group Name'), 'Team Knightro');
-    await tester.enterText(field('Group ID'), 'knightro');
     await tester.tap(find.text('Create'));
     await tester.pumpAndSettle();
 
     expect(api.created.single, {
-      'id': 'knightro',
       'name': 'Team Knightro',
       'primaryColor': '#ead217',
     });
@@ -87,35 +91,31 @@ void main() {
     expect(find.text('K7Q-2MX'), findsOneWidget);
     await tester.tap(find.text('Done'));
     await tester.pumpAndSettle();
-    expect(find.text('Group ID: knightro'), findsOneWidget);
+    expect(find.text('Team Knightro'), findsOneWidget);
+    expect(find.text('Admin'), findsOneWidget);
   });
 
-  testWidgets('group ID only accepts letters and numbers', (tester) async {
+  testWidgets('asks only for a name and a color, not an ID', (tester) async {
     await openDialog(tester);
 
-    await tester.enterText(field('Group ID'), 'ucf-cheer 2026!');
-
-    expect(find.text('ucfcheer2026'), findsOneWidget);
+    expect(find.text('Group ID'), findsNothing);
   });
 
-  testWidgets('there is no public/private choice or password',
-      (tester) async {
+  testWidgets('there is no public/private choice or password', (tester) async {
     await openDialog(tester);
 
     expect(find.text('Private group'), findsNothing);
     expect(find.text('Group Password'), findsNothing);
   });
 
-  testWidgets('shows the server error for a taken ID and stays open',
-      (tester) async {
+  testWidgets('shows the server error and stays open', (tester) async {
     await openDialog(tester);
 
-    await tester.enterText(field('Group Name'), 'Dupe');
-    await tester.enterText(field('Group ID'), 'taken');
+    await tester.enterText(field('Group Name'), 'Broken');
     await tester.tap(find.text('Create'));
     await tester.pumpAndSettle();
 
-    expect(find.text('That group ID already exists.'), findsOneWidget);
+    expect(find.text('Unable to create group.'), findsOneWidget);
     expect(find.byType(Dialog), findsOneWidget);
   });
 }
