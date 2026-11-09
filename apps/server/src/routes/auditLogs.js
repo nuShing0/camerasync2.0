@@ -1,4 +1,5 @@
 import { Router } from "express";
+<<<<<<< HEAD
 import { requireAuth } from "../middleware/requireAuth.js";
 import { 
     atLeast,
@@ -33,10 +34,33 @@ auditLogRouter.get("/audit-logs", requireAuth, async (req, res, next) => {
     } catch (err) {
         //  passes database/execution errors to Express instead of hanging
         next(err);
+=======
+import { requireAuth } from "../middleware/requireAuth";
+import { 
+    atLeast,
+    getSessionRole
+} from "../middleware/groupRole";
+
+export const auditLogRouter = Router();
+
+auditLogRouter.get("/audit-logs", requireAuth, async (req, res, next) => {
+    try{
+        const role = await getSessionRole(req.params.id, req.user.id);
+        if(!role){
+            return res.status(404).json({ error: "Session not found." });
+        }
+
+        if(!atLeast(role, "admin")){
+            return res.status(403).json({ error: "Only group admins can view the downloads audit log" });
+        }
+    } catch(err){
+
+>>>>>>> 45620c0b2b009a81f4ffc626159e063b6360bc18
     }
 });
 
 auditLogRouter.get("/audit-logs/export", requireAuth, async (req, res, next) => {
+<<<<<<< HEAD
     try {
         const role = await getSessionRole(req.params.id, req.user.id);
         if (!role) {
@@ -75,5 +99,18 @@ auditLogRouter.get("/audit-logs/export", requireAuth, async (req, res, next) => 
         return res.end();
     } catch (err) {
         next(err);
+=======
+    try{
+        const role = await getSessionRole(req.params.id, req.user.id);
+        if(!role){
+            return res.status(404).json({ error: "Session not found." });
+        }
+
+        if(!atLeast(role, "admin")){
+            return res.status(403).json({ error: "Only group admins can view the downloads audit log" });
+        }
+    } catch(err){
+
+>>>>>>> 45620c0b2b009a81f4ffc626159e063b6360bc18
     }
 });
