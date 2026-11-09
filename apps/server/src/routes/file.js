@@ -222,6 +222,26 @@ fileRouter.get("/get/:fileId", requireAuth, async (req, res, next) => {
   } catch (err) {
     return next(err);
   }
+  // Guard against the HTTP Range Request trap (video streaming chunks)
+  const isStreamingChunk = req.headers.range && req.headers.range !== 'bytes=0-';
+  const isExplicitDownload = req.query.download === 'true';
+
+  if (!isStreamingChunk || isExplicitDownload) {
+    try {
+      // Non-blocking insert. Finds the session_id dynamically based on the fileId.
+      await pool.query(
+        `INSERT INTO download_logs (session_id, user_id, file_type, file_id, ip_address)
+         SELECT session_id, $2, 'recording', $1, $3
+         FROM recording_session_videos
+         WHERE file_id = $1 OR preview_file_id = $1 OR thumbnail_file_id = $1
+         LIMIT 1`,
+        [fileId, req.user.id, req.ip]
+      );
+    } catch (logError) {
+      console.error("[Audit Log Error] Failed to write download_log:", logError);
+    }
+  }
+  
 
   return storage.serve(req, res, next, { fileId, contentType: mediaType.mime });
 });

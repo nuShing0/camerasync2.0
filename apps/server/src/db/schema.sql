@@ -360,3 +360,60 @@ ALTER TABLE recording_session_videos
 -- are checked once (see src/recordings/previews.js).
 ALTER TABLE recording_session_videos
     ADD COLUMN IF NOT EXISTS preview_checked BOOLEAN NOT NULL DEFAULT FALSE;
+
+
+-- Files a take no longer uses (a phone's preview, once the full video is
+-- in), kept for a while so anyone already watching them can finish (see
+-- src/recordings/retiredFiles.js).
+CREATE TABLE IF NOT EXISTS retired_files (
+    file_id TEXT PRIMARY KEY,
+    session_id VARCHAR(6) NOT NULL,
+    retired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Small stills several a second, tiled to sheets, shown while the seek bar
+-- is dragged (see src/recordings/scrubFrames.js): {fps, width, height, cols,
+-- rows, frames, sheets: [file ids]}. NULL until made; scrub_failed when they
+-- couldn't be, so they aren't retried on every start.
+ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS scrub JSONB;
+ALTER TABLE recording_session_videos
+    ADD COLUMN IF NOT EXISTS scrub_failed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Finding a stored file's video row (the access check on /api/files/get),
+-- by whichever column it's in, without scanning every recording.
+CREATE INDEX IF NOT EXISTS recording_session_videos_file_idx
+    ON recording_session_videos (file_id);
+CREATE INDEX IF NOT EXISTS recording_session_videos_preview_idx
+    ON recording_session_videos (preview_file_id);
+CREATE INDEX IF NOT EXISTS recording_session_videos_thumbnail_idx
+    ON recording_session_videos (thumbnail_file_id);
+CREATE INDEX IF NOT EXISTS recording_session_videos_scrub_sheets_idx
+    ON recording_session_videos USING gin ((scrub->'sheets'));
+
+-- Uploads sent in pieces (see src/routes/file.js), until the last piece is
+-- in: whose, the file type, its full size, and the take's details (the
+-- /upload query) to file it with.
+CREATE TABLE IF NOT EXISTS resumable_uploads (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    ext TEXT NOT NULL,
+    size BIGINT NOT NULL,
+    query JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- A recording deleted on its own (its videos are gone): the number stays
+-- taken, and late uploads for it are refused (see recordings/numbering.js).
+ALTER TABLE session_recordings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+-- Tracks when users download specific files from a recording session
+CREATE TABLE IF NOT EXISTS download_logs (
+    id SERIAL PRIMARY KEY,
+    session_id VARCHAR(6) NOT NULL REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    user_id BIGINT REFERENCES users(user_id) ON DELETE SET NULL, 
+    file_type VARCHAR(50), 
+    file_id TEXT, 
+    ip_address VARCHAR(45),
+    downloaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_download_logs_session_id ON download_logs(session_id);
