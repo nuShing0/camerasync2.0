@@ -1,5 +1,4 @@
 import { Router } from "express";
-<<<<<<< HEAD
 import { requireAuth } from "../middleware/requireAuth.js";
 import { 
     atLeast,
@@ -32,35 +31,12 @@ auditLogRouter.get("/audit-logs", requireAuth, async (req, res, next) => {
 
         return res.json({ logs: rows });
     } catch (err) {
-        //  passes database/execution errors to Express instead of hanging
+        // passes database/execution errors to Express instead of hanging
         next(err);
-=======
-import { requireAuth } from "../middleware/requireAuth";
-import { 
-    atLeast,
-    getSessionRole
-} from "../middleware/groupRole";
-
-export const auditLogRouter = Router();
-
-auditLogRouter.get("/audit-logs", requireAuth, async (req, res, next) => {
-    try{
-        const role = await getSessionRole(req.params.id, req.user.id);
-        if(!role){
-            return res.status(404).json({ error: "Session not found." });
-        }
-
-        if(!atLeast(role, "admin")){
-            return res.status(403).json({ error: "Only group admins can view the downloads audit log" });
-        }
-    } catch(err){
-
->>>>>>> 45620c0b2b009a81f4ffc626159e063b6360bc18
     }
 });
 
 auditLogRouter.get("/audit-logs/export", requireAuth, async (req, res, next) => {
-<<<<<<< HEAD
     try {
         const role = await getSessionRole(req.params.id, req.user.id);
         if (!role) {
@@ -88,7 +64,7 @@ auditLogRouter.get("/audit-logs/export", requireAuth, async (req, res, next) => 
         for (const row of rows) {
             const date = new Date(row.downloaded_at).toISOString();
             
-            //Strings are wrapped in quotes and internal quotes are escaped 
+            // Strings are wrapped in quotes and internal quotes are escaped 
             // to prevent commas inside names from breaking the CSV structure
             const name = `"${(row.display_name || 'Unknown').replace(/"/g, '""')}"`;
             const email = `"${(row.email || '').replace(/"/g, '""')}"`;
@@ -99,18 +75,5 @@ auditLogRouter.get("/audit-logs/export", requireAuth, async (req, res, next) => 
         return res.end();
     } catch (err) {
         next(err);
-=======
-    try{
-        const role = await getSessionRole(req.params.id, req.user.id);
-        if(!role){
-            return res.status(404).json({ error: "Session not found." });
-        }
-
-        if(!atLeast(role, "admin")){
-            return res.status(403).json({ error: "Only group admins can view the downloads audit log" });
-        }
-    } catch(err){
-
->>>>>>> 45620c0b2b009a81f4ffc626159e063b6360bc18
     }
 });
