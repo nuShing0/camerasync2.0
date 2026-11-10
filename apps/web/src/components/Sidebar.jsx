@@ -99,6 +99,26 @@ function CalendarIcon() {
   );
 }
 
+// A clipboard with a downward arrow: the download audit.
+function AuditIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="28"
+      height="28"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="5" y="4" width="14" height="17" rx="2.5" />
+      <path d="M9 2.8h6v2.6H9zM12 9v7M9 13l3 3 3-3" />
+    </svg>
+  );
+}
+
 // An outline cog (the Lucide "settings" shape), to match the other icons.
 export function GearIcon({ size = 28 }) {
   return (
@@ -124,6 +144,7 @@ const NAV_ITEMS = [
   { to: "/groups", label: "Groups", icon: <GroupsIcon /> },
   { to: "/watch", label: "Sessions", icon: <SessionsIcon /> },
   { to: "/calendar", label: "Calendar", icon: <CalendarIcon /> },
+  { to: "/download-audit", label: "Audit", icon: <AuditIcon /> },
   { to: "/settings", label: "Settings", icon: <GearIcon /> },
 ];
 

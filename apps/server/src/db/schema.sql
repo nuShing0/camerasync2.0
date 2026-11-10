@@ -427,3 +427,11 @@ CREATE TABLE IF NOT EXISTS download_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_download_logs_session_id ON download_logs(session_id);
+
+-- Which recording in the session ("Recording 003") a download was of, so the
+-- download audit can group a session's downloads by take. A session download
+-- (the zip on the playback page) logs one row per recording it contains.
+ALTER TABLE download_logs ADD COLUMN IF NOT EXISTS recording_number INTEGER;
+
+-- The download audit filters every query by date.
+CREATE INDEX IF NOT EXISTS idx_download_logs_downloaded_at ON download_logs(downloaded_at);

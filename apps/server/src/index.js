@@ -20,6 +20,7 @@ import { recordingsRouter } from './routes/recordings.js';
 import { fileRouter } from "./routes/file.js";
 import { notificationsRouter } from "./routes/notifications.js";
 import { auditLogRouter } from "./routes/auditLogs.js";
+import { downloadAuditRouter } from "./routes/downloadAudit.js";
 
 const PORT = process.env.PORT || 4000;
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
@@ -27,7 +28,8 @@ const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
 const app = express();
 // credentials:true is required for the browser to send/accept the httpOnly
 // session cookie cross-origin (Vite on :5173 -> API on :4000).
-app.use(cors({ origin: WEB_ORIGIN, credentials: true }));
+// Content-Disposition is exposed so the web app can read export file names.
+app.use(cors({ origin: WEB_ORIGIN, credentials: true, exposedHeaders: ["Content-Disposition"] }));
 app.use(express.json());
 app.use(cookieParser());
 
@@ -47,6 +49,7 @@ app.use("/api/recordings", recordingsRouter);
 app.use("/api/files", fileRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/audit-logs", auditLogRouter);
+app.use("/api/download-audit", downloadAuditRouter);
 
 const server = http.createServer(app);
 

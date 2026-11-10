@@ -20,6 +20,7 @@ import { JoinGroupScreen } from "./screens/JoinGroupScreen.jsx";
 import { GroupsScreen } from "./screens/PlaceholderScreens.jsx";
 import { NotificationsScreen } from "./screens/NotificationsScreen.jsx";
 import { SettingsScreen } from "./screens/SettingsScreen.jsx";
+import { DownloadAuditScreen } from "./screens/DownloadAuditScreen.jsx";
 
 export function App() {
   return (
@@ -74,6 +75,8 @@ function Root() {
         <Route path="/calendar" element={<CalendarScreen />} />
         <Route path="/notifications" element={<NotificationsScreen />} />
         <Route path="/settings" element={<SettingsScreen />} />
+        <Route path="/download-audit" element={<DownloadAuditScreen />} />
+        <Route path="/download-audit/:groupId" element={<DownloadAuditScreen />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

@@ -29,6 +29,7 @@ import {
 import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber, isRecordingDeleted } from "../recordings/numbering.js";
+import { logSessionDownload } from "../recordings/downloadLog.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { STAGES, progressFor, reportProgress } from "../recordings/uploadProgress.js";
 import { startOffsetFromBeep, startOffsetFromEndBeep } from "../recordings/syncBeep.js";
@@ -475,6 +476,14 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
     if (videos.length === 0) {
       return res.status(404).json({ error: "No videos have been uploaded for this session." });
     }
+
+    // The download audit: who downloaded which recordings, and when.
+    await logSessionDownload({
+      sessionId: req.params.id,
+      userId: req.user.id,
+      ip: req.ip,
+      recordingNumbers: videos.map((video) => video.recording_number).filter((n) => n != null),
+    });
 
     const session = sessions[0];
     const day = new Date(session.scheduled_at).toISOString().slice(0, 10);
