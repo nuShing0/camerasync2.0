@@ -9,7 +9,7 @@ import { pool } from "../db/pool.js";
 // mergeParams: true allows this router to access the :id parameter if mounted under a parent route
 export const auditLogRouter = Router({ mergeParams: true });
 
-auditLogRouter.get("/audit-logs", requireAuth, async (req, res, next) => {
+auditLogRouter.get("/:id", requireAuth, async (req, res, next) => {
     try {
         const role = await getSessionRole(req.params.id, req.user.id);
         if (!role) {
@@ -36,7 +36,7 @@ auditLogRouter.get("/audit-logs", requireAuth, async (req, res, next) => {
     }
 });
 
-auditLogRouter.get("/audit-logs/export", requireAuth, async (req, res, next) => {
+auditLogRouter.get("/export/:id", requireAuth, async (req, res, next) => {
     try {
         const role = await getSessionRole(req.params.id, req.user.id);
         if (!role) {
