@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../widgets/frosted.dart';
 import 'upload_queue.dart';
 
 /// A small pill on the camera saying what the phone's outbox is doing:
@@ -53,21 +54,38 @@ class _UploadStatusBannerState extends State<UploadStatusBanner> {
     final waiting = q.waiting;
     String takes(int n) => n == 1 ? '1 take' : '$n takes';
 
-    if (event == UploadEvent.unrecorded && eventAge! < const Duration(seconds: 10)) {
-      return const _Status(_Kind.error,
-          "That take didn't record: the camera was interrupted.");
+    if (event == UploadEvent.unrecorded &&
+        eventAge! < const Duration(seconds: 10)) {
+      return const _Status(
+          _Kind.error, "That take didn't record: the camera was interrupted.");
     }
-    if (event == UploadEvent.rejected && eventAge! < const Duration(seconds: 10)) {
+    if (event == UploadEvent.rejected &&
+        eventAge! < const Duration(seconds: 10)) {
       return const _Status(_Kind.error, "The server couldn't use that take.");
     }
     if (q.sending != null) {
       final more = waiting - 1;
-      return _Status(_Kind.busy,
-          more > 0 ? 'Uploading a take ($more more waiting)…' : 'Uploading take…');
+      final fraction = q.sendingFraction;
+      if (fraction != null) {
+        // Same words as the progress under the angle when it's watched.
+        final what = q.sendingStage == 'preview' ? 'preview' : 'full quality';
+        final percent = (fraction * 100).floor();
+        return _Status(
+            _Kind.busy,
+            more > 0
+                ? 'Uploading $what $percent% ($more more waiting)'
+                : 'Uploading $what $percent%',
+            progress: fraction);
+      }
+      return _Status(
+          _Kind.busy,
+          more > 0
+              ? 'Uploading a take ($more more waiting)…'
+              : 'Uploading take…');
     }
     if (waiting > 0 && q.paused) {
-      return _Status(_Kind.waiting,
-          '${takes(waiting)} to upload after this take');
+      return _Status(
+          _Kind.waiting, '${takes(waiting)} to upload after this take');
     }
     if (waiting > 0) {
       final retryAt = q.nextRetryAt;
@@ -79,56 +97,80 @@ class _UploadStatusBannerState extends State<UploadStatusBanner> {
       }
       return _Status(_Kind.waiting, '${takes(waiting)} waiting to upload');
     }
-    if (event == UploadEvent.uploaded && eventAge! < const Duration(seconds: 4)) {
+    if (event == UploadEvent.uploaded &&
+        eventAge! < const Duration(seconds: 4)) {
       return const _Status(_Kind.done, 'Uploaded for playback');
     }
     return null;
   }
 
   Widget _pill(_Status status) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black54,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          switch (status.kind) {
-            _Kind.busy => const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.white),
-              ),
-            _Kind.waiting => const Icon(Icons.cloud_upload_outlined,
-                size: 18, color: Colors.amberAccent),
-            _Kind.done => const Icon(Icons.cloud_done_outlined,
-                size: 18, color: Colors.greenAccent),
-            _Kind.error =>
-              const Icon(Icons.error_outline, size: 18, color: Colors.redAccent),
-          },
-          const SizedBox(width: 8),
-          Flexible(
-            child: Text(status.message,
-                style: const TextStyle(color: Colors.white, fontSize: 13)),
+    return Frosted(
+      radius: 20,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: IntrinsicWidth(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _row(status),
+              if (status.progress case final progress?) ...[
+                const SizedBox(height: 6),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 3,
+                    color: Colors.white,
+                    backgroundColor: Colors.white24,
+                  ),
+                ),
+              ],
+            ],
           ),
-          if (status.canRetry) ...[
-            const SizedBox(width: 6),
-            TextButton(
-              onPressed: widget.queue.retryNow,
-              style: TextButton.styleFrom(
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              child: const Text('Try now'),
-            ),
-          ],
-        ],
+        ),
       ),
+    );
+  }
+
+  Widget _row(_Status status) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        switch (status.kind) {
+          _Kind.busy => const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                  strokeWidth: 2, color: Colors.white),
+            ),
+          _Kind.waiting => const Icon(Icons.cloud_upload_outlined,
+              size: 18, color: Colors.amberAccent),
+          _Kind.done => const Icon(Icons.cloud_done_outlined,
+              size: 18, color: Colors.greenAccent),
+          _Kind.error =>
+            const Icon(Icons.error_outline, size: 18, color: Colors.redAccent),
+        },
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(status.message,
+              style: const TextStyle(color: Colors.white, fontSize: 13)),
+        ),
+        if (status.canRetry) ...[
+          const SizedBox(width: 6),
+          TextButton(
+            onPressed: widget.queue.retryNow,
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: Size.zero,
+              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            ),
+            child: const Text('Try now'),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -136,8 +178,12 @@ class _UploadStatusBannerState extends State<UploadStatusBanner> {
 enum _Kind { busy, waiting, done, error }
 
 class _Status {
-  const _Status(this.kind, this.message, {this.canRetry = false});
+  const _Status(this.kind, this.message,
+      {this.canRetry = false, this.progress});
   final _Kind kind;
   final String message;
   final bool canRetry;
+
+  /// How much of the upload has gone, 0 to 1, drawn as a bar under the text.
+  final double? progress;
 }

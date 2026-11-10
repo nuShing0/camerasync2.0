@@ -65,12 +65,12 @@ export function run(command, args, { timeoutMs = TIMEOUT_MS } = {}) {
   });
 }
 
-// Size, frame rate and bitrate of the first video stream, as displayed
-// (a phone's sideways-stored video counts as upright).
-async function probe(filePath) {
+// Size, frame rate, bitrate and length of the first video stream, as
+// displayed (a phone's sideways-stored video counts as upright).
+export async function probe(filePath) {
   const { ok, missing, out } = await run("ffprobe", [
     "-v", "error", "-select_streams", "v:0",
-    "-show_entries", "stream=codec_name,width,height,avg_frame_rate,bit_rate:stream_side_data=rotation:format=bit_rate",
+    "-show_entries", "stream=codec_name,width,height,avg_frame_rate,bit_rate:stream_side_data=rotation:format=bit_rate,duration",
     "-of", "json", filePath,
   ], { timeoutMs: 60_000 });
   if (missing) return { missing: true };
@@ -88,6 +88,7 @@ async function probe(filePath) {
       fps: den ? num / den : 0,
       bitRate: Number(stream.bit_rate ?? info.format?.bit_rate ?? 0),
       codec: stream.codec_name,
+      duration: Number(info.format?.duration ?? 0),
     };
   } catch {
     return null;

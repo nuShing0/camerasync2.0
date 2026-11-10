@@ -6,8 +6,6 @@
 // server pings every client and times the pong), so it works for every
 // client without any changes on their side.
 
-import { SYNC_BEEP_DELAY_MS } from "../recordings/syncBeep.js";
-
 // Never shorter than this: plenty on a normal connection, and what a device
 // gets before its first heartbeat has been timed.
 export const MIN_START_DELAY_MS = 1500;
@@ -51,28 +49,27 @@ export function trackRoundTrips(socket, now = Date.now) {
   });
 }
 
-// How long the cameras keep rolling after the end beep starts: the beep
-// itself (240 ms), the playing device's audio latency, and some margin.
-export const END_BEEP_TAIL_MS = 800;
-
-// Never closer to the start beep than this, so a very short take still has
-// the two beeps apart.
-const END_BEEP_AFTER_START_BEEP_MS = 600;
+// The least a stop waits: long enough for the command to reach every device
+// on a quick network, so they all stop at the same moment.
+export const MIN_STOP_DELAY_MS = 600;
 
 // When a stop takes effect. A take that hasn't reached its shared start yet
-// is simply cancelled. Otherwise the device that pressed Stop plays the end
-// beep once the command has reached the slowest device, and every camera
-// stops END_BEEP_TAIL_MS later, so all of them record it.
+// is simply cancelled. Otherwise every camera stops once the command has
+// reached the slowest device.
+//
+// Cameras used to roll on after that for an end beep (and a very short take
+// was stretched to keep it clear of the start beep). Angles are lined up by
+// each camera's first frame now and no device plays the beeps, so a stop is
+// only as late as the network needs. endBeepAtEpochMs is still sent, at the
+// stop, for app versions that read it (a non-null one tells them the take
+// wasn't cancelled).
 export function stopSchedule(roundTripsMs, startAtEpochMs, now) {
   if (now < startAtEpochMs) {
     return { stopAtEpochMs: now, endBeepAtEpochMs: null };
   }
   const known = roundTripsMs.filter((ms) => Number.isFinite(ms) && ms >= 0);
   const slowest = known.length > 0 ? Math.max(...known) : 0;
-  const delay = Math.min(MAX_START_DELAY_MS, Math.max(1000, Math.round(slowest + 300)));
-  const endBeepAtEpochMs = Math.max(
-    now + delay,
-    startAtEpochMs + SYNC_BEEP_DELAY_MS + END_BEEP_AFTER_START_BEEP_MS
-  );
-  return { endBeepAtEpochMs, stopAtEpochMs: endBeepAtEpochMs + END_BEEP_TAIL_MS };
+  const delay = Math.min(MAX_START_DELAY_MS, Math.max(MIN_STOP_DELAY_MS, Math.round(slowest + 300)));
+  const stopAtEpochMs = now + delay;
+  return { stopAtEpochMs, endBeepAtEpochMs: stopAtEpochMs };
 }

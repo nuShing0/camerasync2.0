@@ -127,7 +127,8 @@ class NotificationTile extends StatelessWidget {
     final (verb, subject) = switch (n.type) {
       'comment' => (' commented on ', n.sessionName ?? 'a recording'),
       'join' => (' joined ', n.groupName),
-      _ => (' started ', n.sessionName ?? 'a practice'),
+      'request' => (' asked to join ', n.groupName),
+      _ => (' started ', n.sessionName ?? 'a session'),
     };
 
     return InkWell(
@@ -191,8 +192,9 @@ class NotificationTile extends StatelessWidget {
 }
 
 /// Opens what a notification is about: the recording for a comment, the
-/// group page for a join, and for a practice the Record tab while it's live
-/// (to join it) or its recording once it's over. Same rules as the web app.
+/// group page for a join or a request to join (to approve it there), and for
+/// a session the Record tab while it's live (to join it) or its recording
+/// once it's over. Same rules as the web app.
 Future<void> openNotification(
   BuildContext context,
   AuthService auth,
@@ -209,7 +211,7 @@ Future<void> openNotification(
     return;
   }
   try {
-    if (n.type == 'join') {
+    if (n.type == 'join' || n.type == 'request') {
       final groups = await GroupsApi(auth.api).getMyGroups();
       final group = groups.where((g) => g.id == n.groupId).firstOrNull;
       if (group == null) return gone('group');

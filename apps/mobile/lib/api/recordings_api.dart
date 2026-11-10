@@ -1,3 +1,6 @@
+import 'dart:io';
+import 'dart:math' as math;
+
 import 'package:flutter/widgets.dart';
 import 'api_client.dart';
 
@@ -10,6 +13,7 @@ class RecordingSession {
     required this.status,
     required this.activeMemberCount,
     required this.isJoined,
+    this.activeMemberNames = const [],
     this.groupId,
     this.scheduledAt,
     this.memberCount,
@@ -24,6 +28,10 @@ class RecordingSession {
   final String status;
   final int activeMemberCount;
   final bool isJoined;
+
+  /// Who's in the session now, earliest first (for the live card's
+  /// initials). Empty from servers that don't send it.
+  final List<String> activeMemberNames;
   final String? groupId;
   final DateTime? scheduledAt;
 
@@ -56,6 +64,10 @@ class RecordingSession {
         status: (json['status'] ?? '').toString(),
         activeMemberCount: (json['activeMemberCount'] as num?)?.toInt() ?? 0,
         isJoined: json['isJoined'] == true,
+        activeMemberNames: [
+          for (final name in json['activeMemberNames'] as List? ?? const [])
+            name.toString(),
+        ],
         groupId: json['groupId']?.toString(),
         scheduledAt: json['scheduledAt'] == null
             ? null
@@ -79,6 +91,8 @@ class AngleVideo {
     this.previewOnly = false,
     this.startOffsetMs,
     this.takeStartedAtMs,
+    this.upload,
+    this.scrub,
   });
 
   final int userId;
@@ -98,6 +112,13 @@ class AngleVideo {
   /// When the take began, for telling a video still on its way from one
   /// that's not coming.
   final int? takeStartedAtMs;
+
+  /// How far along its upload is, while the full video isn't in yet.
+  final UploadProgress? upload;
+
+  /// Stills shown while the seek bar is dragged; null until the server has
+  /// made them.
+  final ScrubStills? scrub;
 
   /// Shown as on its way for this long after the take.
   static const uploadWait = Duration(minutes: 30);
@@ -126,6 +147,86 @@ class AngleVideo {
         previewOnly: json['previewOnly'] == true,
         startOffsetMs: (json['startOffsetMs'] as num?)?.toInt(),
         takeStartedAtMs: takeStartedAtMs,
+        upload: json['upload'] is Map
+            ? UploadProgress.fromJson(Map<String, dynamic>.from(json['upload']))
+            : null,
+        scrub: json['scrub'] is Map
+            ? ScrubStills.fromJson(Map<String, dynamic>.from(json['scrub']))
+            : null,
+      );
+}
+
+/// An angle's small stills, several a second, tiled [cols] x [rows] to a
+/// sheet (see the server's recordings/scrubFrames.js): frame k of the
+/// video's own timeline (k / [fps] s) is tile k % (cols * rows) of sheet
+/// k ~/ (cols * rows), left to right, top to bottom.
+class ScrubStills {
+  const ScrubStills({
+    required this.fps,
+    required this.width,
+    required this.height,
+    required this.cols,
+    required this.rows,
+    required this.frames,
+    required this.sheets,
+  });
+
+  final int fps;
+
+  /// One still's size in the sheet.
+  final int width;
+  final int height;
+  final int cols;
+  final int rows;
+  final int frames;
+
+  /// Server paths of the sheets, in order.
+  final List<String> sheets;
+
+  /// Which sheet, column and row hold the still for [at] into the video.
+  ({int sheet, int col, int row}) tileAt(Duration at) {
+    final frame =
+        (at.inMilliseconds * fps ~/ 1000).clamp(0, frames - 1).toInt();
+    final perSheet = cols * rows;
+    final index = frame % perSheet;
+    return (sheet: frame ~/ perSheet, col: index % cols, row: index ~/ cols);
+  }
+
+  factory ScrubStills.fromJson(Map<String, dynamic> json) => ScrubStills(
+        fps: (json['fps'] as num).toInt(),
+        width: (json['width'] as num).toInt(),
+        height: (json['height'] as num).toInt(),
+        cols: (json['cols'] as num).toInt(),
+        rows: (json['rows'] as num).toInt(),
+        frames: (json['frames'] as num).toInt(),
+        sheets: [for (final sheet in json['sheets'] as List) sheet.toString()],
+      );
+}
+
+/// A signed CDN link to a stored file (see the server's storage/cdn.js),
+/// which needs no login, rather than one to our server, which does.
+bool isSignedLink(String url) => url.contains('Key-Pair-Id=');
+
+/// Whether two links are to the same stored file: a CDN link is re-signed
+/// every few hours, and a player handed the new one needn't load it again.
+bool sameFile(String a, String b) => a.split('?').first == b.split('?').first;
+
+/// An angle's upload as the uploading device last reported it.
+class UploadProgress {
+  const UploadProgress(
+      {required this.stage, required this.fraction, required this.stalled});
+
+  /// 'preview' (the small copy, sent first) or 'full'.
+  final String stage;
+  final double fraction;
+
+  /// No report for a while: the device lost its connection.
+  final bool stalled;
+
+  factory UploadProgress.fromJson(Map<String, dynamic> json) => UploadProgress(
+        stage: (json['stage'] ?? 'full').toString(),
+        fraction: (json['fraction'] as num?)?.toDouble() ?? 0,
+        stalled: json['stalled'] == true,
       );
 }
 
@@ -179,11 +280,15 @@ class SessionVideos {
     required this.sessionId,
     required this.sessionName,
     required this.recordings,
+    this.canDelete = false,
   });
 
   final String sessionId;
   final String sessionName;
   final List<SessionRecording> recordings;
+
+  /// This user can delete recordings (an admin of the group).
+  final bool canDelete;
 
   factory SessionVideos.fromJson(Map<String, dynamic> json) {
     final session = Map<String, dynamic>.from(json['session'] as Map);
@@ -193,6 +298,7 @@ class SessionVideos {
       recordings: ((json['recordings'] as List?) ?? const [])
           .map((r) => SessionRecording.fromJson(Map<String, dynamic>.from(r)))
           .toList(),
+      canDelete: json['canDelete'] == true,
     );
   }
 }
@@ -337,6 +443,12 @@ class RecordingsApi {
     });
   }
 
+  /// Deletes one recording of a session: every angle, and its comments.
+  /// Admins only.
+  Future<void> deleteRecording(String id, int startedAtMs) async {
+    await _api.delete('/api/recordings/sessions/$id/recordings/$startedAtMs');
+  }
+
   Future<void> deleteSessionNote(String id, int noteId) async {
     await _api.delete('/api/recordings/sessions/$id/notes/$noteId');
   }
@@ -346,12 +458,28 @@ class RecordingsApi {
   ImageProvider? thumbnailOf(RecordingSession session) {
     final path = session.thumbnailUrl;
     if (path == null) return null;
-    final cookie = _api.cookie;
-    return NetworkImage(absoluteUrl(path),
-        headers: {if (cookie != null) 'Cookie': cookie});
+    final url = absoluteUrl(path);
+    return NetworkImage(url, headers: mediaHeaders(url));
   }
 
-  /// Turns a server-relative path like `/api/files/get/x.mp4` into a full URL.
+  /// One sheet of an angle's seek-bar stills (see [ScrubStills]).
+  ImageProvider scrubSheet(String path) {
+    final url = absoluteUrl(path);
+    return NetworkImage(url, headers: mediaHeaders(url));
+  }
+
+  /// What to send with a request for a stored file at [url]: the login
+  /// cookie to this server (which checks it), nothing to the CDN (its links
+  /// are signed, and the cookie is nobody else's business).
+  Map<String, String> mediaHeaders(String url) {
+    final cookie = _api.cookie;
+    return {
+      if (cookie != null && !isSignedLink(url)) 'Cookie': cookie,
+    };
+  }
+
+  /// Turns a server-relative path like `/api/files/get/x.mp4` into a full
+  /// URL; a full one (a signed CDN link) is left as it is.
   String absoluteUrl(String path) =>
       path.startsWith('http') ? path : '${_api.baseUrl}$path';
 
@@ -378,6 +506,12 @@ class RecordingsApi {
   /// (see `RecordingStartCommand.serverStartAtEpochMs`); the server lines this
   /// angle up with every other device's by that value. A [preview] is a
   /// small copy sent first, played until the full video arrives.
+  ///
+  /// Sent in pieces ([uploadPieceBytes] each), so an upload that's cut off
+  /// (no connection, a take starting) carries on later from what arrived:
+  /// [resumeId] is an earlier try's upload, and [onStarted] hears the id of
+  /// a new one, to keep for next time. A server without resumable uploads
+  /// gets the whole file in one request, as before.
   Future<void> uploadSessionVideo(
     String id,
     int startedAtMs,
@@ -387,15 +521,87 @@ class RecordingsApi {
     String? startClock,
     bool preview = false,
     Duration timeout = const Duration(minutes: 10),
-  }) =>
-      _api.postFile(
-        '/api/files/upload'
+    void Function(int sent, int total)? onProgress,
+    String? resumeId,
+    void Function(String uploadId)? onStarted,
+  }) async {
+    final name = filename ?? filePath.split('/').last;
+    final query =
         '?sessionId=${Uri.encodeQueryComponent(id)}&startedAt=$startedAtMs'
         '${actualStartedAtMs == null ? '' : '&actualStartedAt=$actualStartedAtMs'}'
         '${startClock == null ? '' : '&startClock=$startClock'}'
-        '${preview ? '&kind=preview' : ''}',
-        filePath: filePath,
-        filename: filename,
-        timeout: timeout,
-      );
+        '${preview ? '&kind=preview' : ''}';
+    final file = File(filePath);
+    final size = await file.length();
+
+    var uploadId = resumeId;
+    var offset = 0;
+    if (uploadId != null) {
+      try {
+        final status = await _api.get('/api/files/uploads/$uploadId');
+        offset = (status['offset'] as num).toInt();
+        if ((status['size'] as num).toInt() != size) uploadId = null;
+      } on ApiException catch (e) {
+        // Finished already, or cleared away: start again.
+        if (e.statusCode != 404) rethrow;
+        uploadId = null;
+      }
+    }
+    if (uploadId == null) {
+      try {
+        final started = await _api.post('/api/files/uploads$query'
+            '&size=$size&name=${Uri.encodeQueryComponent(name)}');
+        uploadId = started['uploadId'] as String;
+      } on ApiException catch (e) {
+        if (e.statusCode != 404) rethrow;
+        // An older server: the whole file at once.
+        await _api.postFile('/api/files/upload$query',
+            filePath: filePath,
+            filename: filename,
+            timeout: timeout,
+            onProgress: onProgress);
+        return;
+      }
+      offset = 0;
+      onStarted?.call(uploadId);
+    }
+
+    while (offset < size) {
+      final end = math.min(offset + uploadPieceBytes, size);
+      final from = offset;
+      try {
+        final sent = await _api.putBytes(
+          '/api/files/uploads/$uploadId?offset=$from',
+          file.openRead(from, end),
+          end - from,
+          onProgress: (bytes) => onProgress?.call(from + bytes, size),
+        );
+        offset = (sent['offset'] as num).toInt();
+      } on ApiException catch (e) {
+        // The server has a different amount than we thought (a piece that
+        // half arrived): carry on from what it has.
+        if (e.statusCode != 409) rethrow;
+        final status = await _api.get('/api/files/uploads/$uploadId');
+        offset = (status['offset'] as num).toInt();
+      }
+    }
+    // Finishing stores and checks the whole video, which takes a while.
+    await _api.postSlow(
+        '/api/files/uploads/$uploadId/complete', const Duration(minutes: 5));
+  }
+
+  /// How much of a recording goes up in one request: small enough that a
+  /// dropped connection loses little, big enough not to waste time on
+  /// requests.
+  static const uploadPieceBytes = 4 * 1024 * 1024;
+
+  /// How far along this device's upload of one angle is, for the bars
+  /// viewers see under it. [stage] is 'preview' or 'full'.
+  Future<void> reportUploadProgress(
+          String id, int startedAtMs, String stage, double fraction) =>
+      _api.post('/api/recordings/sessions/$id/upload-progress', {
+        'startedAt': startedAtMs,
+        'stage': stage,
+        'fraction': fraction,
+      });
 }

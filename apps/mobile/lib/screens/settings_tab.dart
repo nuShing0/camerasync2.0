@@ -5,6 +5,7 @@ import '../api/api_client.dart';
 import '../api/groups_api.dart';
 import '../auth/auth_service.dart';
 import '../notifications/phone_alerts.dart';
+import 'forgot_password_screen.dart';
 import '../team_accent.dart';
 import '../theme.dart';
 
@@ -105,13 +106,27 @@ class _SettingsTabState extends State<SettingsTab> {
                 value: '••••••••',
                 action: 'Change',
                 onAction: () async {
-                  final changed = await showDialog<bool>(
+                  final result = await showDialog<_PasswordDialogResult>(
                     context: context,
                     builder: (_) => _PasswordDialog(auth: widget.auth),
                   );
-                  if (changed == true) {
+                  if (result == _PasswordDialogResult.changed) {
                     _toast(
                         'Password changed. Your other devices were signed out.');
+                  } else if (result == _PasswordDialogResult.resetWithEmail &&
+                      context.mounted) {
+                    final reset = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute(
+                        builder: (_) => ForgotPasswordScreen(
+                          auth: widget.auth,
+                          initialEmail: widget.auth.user?.email,
+                          onResetComplete: widget.auth.logout,
+                        ),
+                      ),
+                    );
+                    if (reset == true && context.mounted) {
+                      _toast('Password reset. Sign in with your new password.');
+                    }
                   }
                 },
               ),
@@ -165,7 +180,7 @@ class _SettingsTabState extends State<SettingsTab> {
                       color: Colors.white, fontWeight: FontWeight.w700)),
               const SizedBox(height: 6),
               const Text(
-                'Record practices from several phones at once, then review every angle '
+                'Record sessions from several phones at once, then review every angle '
                 'together with timestamped comments. Built by a UCF senior design team.',
                 style: TextStyle(color: kMuted, height: 1.4),
               ),
@@ -230,7 +245,7 @@ class _NotificationsCardState extends State<_NotificationsCard> {
   static const _kinds = [
     ('comments', 'Comments on recordings'),
     ('joins', 'People joining your groups'),
-    ('sessions', 'Practices starting'),
+    ('sessions', 'Sessions starting'),
   ];
 
   Future<void> _set(String key, bool on) async {
@@ -588,6 +603,8 @@ class _DeleteAccountDialogState extends State<_DeleteAccountDialog> {
   }
 }
 
+enum _PasswordDialogResult { changed, resetWithEmail }
+
 class _PasswordDialog extends StatefulWidget {
   const _PasswordDialog({required this.auth});
 
@@ -631,7 +648,9 @@ class _PasswordDialogState extends State<_PasswordDialog> {
         currentPassword: _current.text,
         newPassword: _next.text,
       );
-      if (mounted) Navigator.of(context).pop(true);
+      if (mounted) {
+        Navigator.of(context).pop(_PasswordDialogResult.changed);
+      }
     } on ApiException catch (e) {
       if (mounted) {
         setState(() {
@@ -660,6 +679,16 @@ class _PasswordDialogState extends State<_PasswordDialog> {
             _field(_current, 'Current password'),
             _field(_next, 'New password'),
             _field(_confirm, 'Confirm new password'),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: _saving
+                    ? null
+                    : () => Navigator.of(context)
+                        .pop(_PasswordDialogResult.resetWithEmail),
+                child: const Text('Forgot your current password?'),
+              ),
+            ),
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(top: 12),

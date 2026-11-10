@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
   createSessionNote,
   deleteSessionNote,
   getSessionNotes,
+  deleteRecording,
   getSessionVideos,
+  mediaCors,
   sessionDownloadUrl,
   uploadSessionVideo,
 } from "../api/recordings.js";
@@ -24,8 +26,12 @@ export function PlaybackScreen({ live = null } = {}) {
   const params = useParams();
   const sessionId = live?.sessionId ?? params.sessionId;
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [session, setSession] = useState(null);
   const [recordings, setRecordings] = useState([]);
+  // Whether this user can delete recordings (an admin of the group).
+  const [canDelete, setCanDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notes, setNotes] = useState([]);
@@ -45,16 +51,36 @@ export function PlaybackScreen({ live = null } = {}) {
         if (cancelled) return;
         setSession(data.session);
         setRecordings(data.recordings);
+        setCanDelete(Boolean(data.canDelete));
       })
       .catch((err) => { if (!cancelled) setError(err.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [sessionId]);
 
+  // Deletes the open recording, after asking, and goes back to the list.
+  const deleteThisRecording = async () => {
+    const name = takeName(recording, recordingIndex);
+    if (!window.confirm(`Delete ${name}? Every angle of it and its comments go too. This can't be undone.`)) return;
+    setDeleting(true);
+    try {
+      await deleteRecording(sessionId, recording.startedAt);
+      const data = await getSessionVideos(sessionId);
+      setRecordings(data.recordings);
+      if (live) setLiveChoice(0);
+      else navigate(`/watch/${sessionId}`, { replace: true });
+    } catch (err) {
+      window.alert(err.message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   // A session opens on its list of recordings (takes); ?recording=N plays
   // one. A session with a single recording goes straight to it.
   const [searchParams] = useSearchParams();
-  const [liveChoice, setLiveChoice] = useState(0);
+  // Over a live session it can open on one recording (live.initial, its number).
+  const [liveChoice, setLiveChoice] = useState(live?.initial ?? 0);
   const chosen = live ? liveChoice : Number(searchParams.get("recording"));
   const chosenIndex = chosen
     ? recordings.findIndex((recording, index) => (recording.number ?? index + 1) === chosen)
@@ -67,13 +93,15 @@ export function PlaybackScreen({ live = null } = {}) {
   // A live session's takes show up as their uploads finish. While a take is
   // being watched, only when one of its angles is still on its way (missing,
   // or just the preview so far), so it fills in without a refresh.
+  // Every 3 s while an angle is uploading, so its progress bar moves.
+  const filling = Boolean(recording?.videos.some((video) =>
+    stillUploading(video, recording.startedAt) || video.previewOnly));
   useAutoRefresh(() => {
-    if (recording && !recording.videos.some((video) => stillUploading(video, recording.startedAt)
-      || video.previewOnly)) return;
+    if (recording && !filling) return;
     getSessionVideos(sessionId)
       .then((data) => setRecordings(data.recordings))
       .catch(() => {});
-  }, 10000);
+  }, filling ? 3000 : 10000);
 
   useEffect(() => {
     if (!startedAt) return;
@@ -112,6 +140,17 @@ export function PlaybackScreen({ live = null } = {}) {
               )}
             </h1>
             <div className="playback-title-tools" ref={setToolsSlot} />
+            {canDelete && recording && (
+              <button type="button" className="playback-delete" disabled={deleting}
+                aria-label={`Delete ${takeName(recording, recordingIndex)}`}
+                title={`Delete ${takeName(recording, recordingIndex)}`}
+                onClick={deleteThisRecording}>
+                <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
+                  <path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
+                    fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </button>
+            )}
             {recordings.some((recording) => recording.videos.some((video) => video.url)) && (
               <a className="playback-download" href={sessionDownloadUrl(sessionId)} download
                 aria-label="Download all videos" title="Download all videos">
@@ -174,7 +213,7 @@ function RecordingList({ sessionId, recordings, onChoose }) {
               <span className="recording-still">
                 {angles[0] ? (
                   <video src={`${angles[0].url}#t=1`} preload="metadata" muted playsInline
-                    crossOrigin="use-credentials" aria-hidden="true" tabIndex={-1} />
+                    crossOrigin={mediaCors(angles[0].url)} aria-hidden="true" tabIndex={-1} />
                 ) : <span>No video yet</span>}
               </span>
               <strong>{takeName(recording, index)}</strong>
@@ -196,6 +235,16 @@ function RecordingList({ sessionId, recordings, onChoose }) {
 // A camera's take that hasn't arrived yet is shown as on its way for this
 // long after the take; after that it's probably not coming.
 const UPLOAD_WAIT_MS = 30 * 60 * 1000;
+
+// Beside an angle's name: its upload's stage and how far along, "Waiting
+// for connection" when it stopped, or "Preview" while one plays.
+function uploadLabel(video) {
+  const upload = video.upload;
+  if (!upload) return video.previewOnly ? "Preview" : null;
+  if (upload.stalled) return "Waiting for connection";
+  const percent = Math.round(upload.fraction * 100);
+  return upload.stage === "preview" ? `Preview ${percent}%` : `Full quality ${percent}%`;
+}
 
 function stillUploading(video, startedAt) {
   return !video.url && Date.now() - startedAt < UPLOAD_WAIT_MS;
@@ -220,8 +269,13 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const [duration, setDuration] = useState(0);
   const [commentText, setCommentText] = useState("");
   const [commentsOpen, setCommentsOpen] = useState(false);
-  // Waiting for every angle to have enough loaded to play together.
-  const [buffering, setBuffering] = useState(false);
+  // The angles (by panel) holding up playback until they've loaded enough
+  // to play together, each marked on its own tile.
+  const [loadingPanels, setLoadingPanels] = useState(() => new Set());
+  // Played and not yet through to the end: no angle changes video until it
+  // is (see sourceFor).
+  const [midTake, setMidTake] = useState(false);
+  const heldSources = useRef(new Map());
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const videoRefs = useRef([]);
@@ -246,6 +300,23 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
       commonAspect(Object.values(aspects)), { minTileWidth: 340 })
     : 4;
   const pages = Math.ceil(panels.length / perPage);
+
+  // What an angle plays. Shown small (with others on screen, or behind the
+  // enlarged one) it's the smaller copy, which loads far quicker; enlarged or
+  // alone, the full video. An angle still uploading starts on the phone's
+  // preview. Mid-take an angle keeps what it started on, so the full video
+  // arriving doesn't make it load again while it's being watched: the switch
+  // happens once the take has played through.
+  const sourceFor = (video, small) => {
+    const wanted = (small && video.previewUrl) || video.url;
+    const key = `${video.userId}:${small ? "small" : "large"}`;
+    const held = heldSources.current.get(key);
+    // The same file under a fresh link (a CDN link is re-signed every few
+    // hours) keeps its link, so the player doesn't load it again.
+    if (!midTake && !(held && sameFile(held, wanted))) heldSources.current.set(key, wanted);
+    else if (!held) heldSources.current.set(key, wanted);
+    return heldSources.current.get(key);
+  };
   useEffect(() => {
     if (page > 0 && page >= pages) setPage(Math.max(0, pages - 1));
   }, [page, pages]);
@@ -415,6 +486,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     playRequest.current += 1;
     videoRefs.current.forEach((video) => video?.pause());
     setPlaying(false);
+    setLoadingPanels(new Set());
     const players = onScreenPlayers().filter((video) => Number.isFinite(video.duration));
     if (players.length < 2) return;
     const at = players[0].currentTime - trimOf(players[0]);
@@ -434,18 +506,36 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
     }
     // Start every angle at once, only when all of them can: otherwise the
     // one still loading starts late and stays behind.
-    setBuffering(true);
-    const ready = await untilReady(players.filter((video) => !video.ended));
+    const starting = players.filter((video) => !video.ended);
+    const panelOf = (video) => videoRefs.current.indexOf(video);
+    setLoadingPanels(new Set(
+      starting.filter((video) => video.readyState < HAVE_FUTURE_DATA).map(panelOf)));
+    const ready = await untilReady(starting, 15000, (video) => {
+      if (request !== playRequest.current) return;
+      setLoadingPanels((current) => {
+        const next = new Set(current);
+        next.delete(panelOf(video));
+        return next;
+      });
+    });
     if (request !== playRequest.current) return;
-    setBuffering(false);
     if (!ready) {
+      const names = starting
+        .filter((video) => video.readyState < HAVE_FUTURE_DATA)
+        .map((video) => video.getAttribute("aria-label"));
       pause();
-      setError("An angle is still loading. Try again in a moment.");
+      setError(names.length === 1
+        ? `${names[0]}'s angle is still loading. Try again in a moment.`
+        : `Still loading: ${names.join(", ")}. Try again in a moment.`);
       return;
     }
+    setLoadingPanels(new Set());
     try {
       await Promise.all(players.filter((video) => !video.ended).map((video) => video.play()));
-      if (request === playRequest.current) setPlaying(true);
+      if (request === playRequest.current) {
+        setPlaying(true);
+        setMidTake(true);
+      }
     } catch {
       if (request !== playRequest.current) return;
       pause();
@@ -526,6 +616,124 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
 
   // the notes panel jumps the player through this
   seek.current = seekTo;
+
+  // Dragging the seek bar: the handle follows the finger at once, and each
+  // angle shows its still for that moment (see ScrubStill), so every angle
+  // shows the same instant as it moves; jumping the real videos around
+  // can't keep up. Letting go lands the videos exactly there, keeps the
+  // stills up until every angle can play from it, then plays them together
+  // if they were playing. Angles without stills yet (just uploaded) follow
+  // the old way: the videos themselves move where they're loaded already.
+  const [scrubTo, setScrubTo] = useState(null);
+  // The moment the stills show, from the drag until the videos have landed.
+  const [stillsAt, setStillsAt] = useState(null);
+  // Redraws once a still sheet has downloaded (see loadSheet).
+  const [, setSheetsLoaded] = useState(0);
+  const onSheetLoaded = () => setSheetsLoaded((count) => count + 1);
+  const scrubbing = useRef({ active: false, wasPlaying: false, lastAt: 0 });
+  // Counts drags, so a release still waiting on the videos after a new drag
+  // has begun leaves that one alone.
+  const scrubCount = useRef(0);
+  // The latest endScrub (it reads this render's state), for the window's
+  // pointerup: letting go anywhere ends the drag, not only over the bar.
+  const endScrubRef = useRef(null);
+  const onScreenVideos = panelVideos.filter((video, panelIndex) => video?.url && isOnScreen(panelIndex));
+  const haveStills = onScreenVideos.length > 0 && onScreenVideos.every((video) => video.scrub);
+  // Every angle on screen switches to its still at once, when all of their
+  // sheets for this moment are here: one angle moving while another sits
+  // on the old moment would look out of sync.
+  const stillsReady = stillsAt != null && haveStills && onScreenVideos.every((video) =>
+    loadSheet(sheetAt(video.scrub, stillsAt + (trims.get(video.userId) ?? 0)), onSheetLoaded));
+  const startScrub = () => {
+    if (scrubbing.current.active) return;
+    scrubbing.current = { active: true, wasPlaying: playingRef.current, lastAt: 0 };
+    scrubCount.current += 1;
+    const release = () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("pointercancel", release);
+      endScrubRef.current?.();
+    };
+    window.addEventListener("pointerup", release);
+    window.addEventListener("pointercancel", release);
+    if (playingRef.current) {
+      playRequest.current += 1;
+      onScreenPlayers().forEach((video) => video.pause());
+      setPlaying(false);
+    }
+  };
+  const moveScrub = (value) => {
+    if (!scrubbing.current.active) {
+      // The keyboard (arrow keys): no drag, just go there.
+      seekTo(value);
+      return;
+    }
+    setScrubTo(value);
+    if (haveStills) {
+      setStillsAt(value);
+      // The sheet for here, and the next one, ahead of the finger.
+      onScreenVideos.forEach((video) => {
+        const at = value + (trims.get(video.userId) ?? 0);
+        loadSheet(sheetAt(video.scrub, at), onSheetLoaded);
+        loadSheet(sheetAt(video.scrub, at + SHEET_AHEAD_S), onSheetLoaded);
+      });
+      return;
+    }
+    const now = performance.now();
+    if (now - scrubbing.current.lastAt < 150) return;
+    const players = onScreenPlayers().filter((video) => Number.isFinite(video.duration));
+    const loadedThere = (video) => {
+      const target = value + trimOf(video);
+      for (let i = 0; i < video.buffered.length; i += 1) {
+        if (video.buffered.start(i) <= target && target <= video.buffered.end(i)) return true;
+      }
+      return false;
+    };
+    if (!players.every(loadedThere)) return;
+    scrubbing.current.lastAt = now;
+    players.forEach((video) => {
+      const target = Math.min(value + trimOf(video), video.duration);
+      if (video.fastSeek) video.fastSeek(target);
+      else video.currentTime = target;
+    });
+  };
+  const endScrub = async () => {
+    if (!scrubbing.current.active) return;
+    const { wasPlaying } = scrubbing.current;
+    scrubbing.current = { active: false, wasPlaying: false, lastAt: 0 };
+    const drag = scrubCount.current;
+    const to = scrubTo;
+    setScrubTo(null);
+    if (to != null) {
+      await seekTo(to);
+      if (haveStills) {
+        await untilReady(onScreenPlayers().filter((video) => !video.ended));
+      }
+    }
+    if (drag !== scrubCount.current) return;
+    setStillsAt(null);
+    if (wasPlaying) play();
+  };
+  endScrubRef.current = endScrub;
+  const shownTime = scrubTo ?? time;
+
+  // How far ahead every angle on screen has loaded, on the shared timeline:
+  // the seek bar's light grey part, like YouTube's. The slowest angle sets
+  // it, since playback waits for that one.
+  const [loadedTo, setLoadedTo] = useState(0);
+  const updateLoaded = () => {
+    const players = onScreenPlayers().filter((video) => Number.isFinite(video.duration));
+    if (players.length === 0) return;
+    const ahead = players.map((video) => {
+      let end = video.currentTime;
+      for (let i = 0; i < video.buffered.length; i += 1) {
+        if (video.buffered.start(i) <= video.currentTime + 0.5) {
+          end = Math.max(end, video.buffered.end(i));
+        }
+      }
+      return end - trimOf(video);
+    });
+    setLoadedTo(Math.max(0, Math.min(...ahead)));
+  };
 
   // Enlarging keeps the other panels mounted but paused; they catch up
   // when the grid comes back.
@@ -687,19 +895,20 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
           <div className="playback-fs-tools">{tools}</div>
         </div>
       ) : toolsSlot ? createPortal(tools, toolsSlot) : <div className="playback-top">{tools}</div>}
-      {buffering && <p className="playback-buffering" role="status">Loading angles…</p>}
       {panelVideos.length === 0 ? (
         <p className="playback-empty">No videos have been uploaded for this recording yet.</p>
       ) : [page].map((pageIndex) => {
         const pageVideos = panelVideos.slice(pageIndex * perPage, pageIndex * perPage + perPage);
+        const sharingPage = pageVideos.filter((video) => video?.url).length > 1;
         return (
-        <div aria-busy={buffering} className="playback-grid" ref={setGridElement}
+        <div aria-busy={loadingPanels.size > 0} className="playback-grid" ref={setGridElement}
           style={gridHeight ? { height: gridHeight } : undefined}
           key={`${recordingIndex}-${pageIndex}-${panels.join(",")}`}>
           {pageVideos.map((video, index) => {
             const panelIndex = pageIndex * perPage + index;
             const audio = getPanelAudio(panelIndex);
             const focused = focusedPanel === panelIndex;
+            const small = focusedPanel === null ? sharingPage : !focused;
             return (
             <figure key={pageIndex * perPage + index} style={tileStyle(panelIndex)}
               className={focused ? "playback-focused" : undefined}>
@@ -756,9 +965,9 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   videoRefs.current[panelIndex] = element;
                   if (element) element.volume = audio.volume;
                 }}
-                src={video.url}
+                src={sourceFor(video, small)}
                 data-trim={trims.get(video.userId) ?? 0}
-                crossOrigin="use-credentials"
+                crossOrigin={mediaCors(sourceFor(video, small))}
                 preload="auto"
                 playsInline
                 muted={audio.muted}
@@ -781,10 +990,13 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   videoTime.current = at;
                   currentTime.current = at;
                   setTime(at);
+                  updateLoaded();
                 }}
+                onProgress={updateLoaded}
                 onEnded={() => {
                   if (onScreenPlayers().every((player) => player.ended)) {
                     setPlaying(false);
+                    setMidTake(false);
                   }
                 }}
                 onWaiting={() => {
@@ -799,10 +1011,30 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                   setError("A video could not load. Try refreshing the page.");
                 }}
               /> : <div className="playback-missing">
-                {video && choosingPanel !== panelIndex && (stillUploading(video, recordings[recordingIndex].startedAt)
-                  ? <><span className="playback-spinner" aria-hidden="true" />Uploading…</>
-                  : "Not uploaded")}
+                {/* The upload's stage and percent once the device reports it.
+                    No spinner: the only spinner is on an angle holding up
+                    playback, so it's clear which one that is. */}
+                {video && choosingPanel !== panelIndex && (video.upload
+                  ? <span className={video.upload.stalled ? "playback-upload-status playback-upload-status-stalled" : "playback-upload-status"}>
+                      {uploadLabel(video)}
+                    </span>
+                  : stillUploading(video, recordings[recordingIndex].startedAt)
+                    ? "Uploading…"
+                    : "Not uploaded")}
               </div>}
+              {/* While the seek bar is dragged (and until the videos land),
+                  this angle's still for the moment under the finger. */}
+              {stillsReady && video?.scrub && isOnScreen(panelIndex) && (
+                <ScrubStill scrub={video.scrub} at={stillsAt + (trims.get(video.userId) ?? 0)}
+                  onLoaded={onSheetLoaded} />
+              )}
+              {/* This angle is what playback is waiting on (shown only past a
+                  moment's wait, so a quick load doesn't flash). */}
+              {loadingPanels.has(panelIndex) && (
+                <div className="playback-tile-loading" role="status">
+                  <span className="playback-spinner" aria-hidden="true" />Loading
+                </div>
+              )}
               {/* Clicking an angle plays it on its own (click again for the
                   grid). An empty panel opens the camera list instead. */}
               <button type="button" className="playback-add-video" disabled={uploading}
@@ -844,8 +1076,23 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
                 </div>
               )}
               {video && <figcaption><span>{video.name}</span>
-                {video.previewOnly && <span className="playback-preview-note" title="Full quality is still uploading">Preview</span>}
+                {/* With a preview playing, its upload's stage goes here; with
+                    nothing playing yet, it's in the middle of the tile. */}
+                {video.url && uploadLabel(video) && (
+                  <span className="playback-preview-note" title="Full quality is still uploading">
+                    {uploadLabel(video)}
+                  </span>
+                )}
               </figcaption>}
+              {/* How far along the upload is, along the bottom edge. */}
+              {video?.upload && (
+                <span className={video.upload.stalled ? "playback-upload playback-upload-stalled" : "playback-upload"}
+                  role="progressbar" aria-label={`${video.name}: ${uploadLabel(video)}`}
+                  aria-valuemin={0} aria-valuemax={100}
+                  aria-valuenow={Math.round(video.upload.fraction * 100)}>
+                  <span style={{ width: `${video.upload.fraction * 100}%` }} />
+                </span>
+              )}
             </figure>
             );
           })}
@@ -915,12 +1162,17 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
         </button>
       </div>
       <div className="playback-seek">
-        <span>{formatTime(time * 1000)}</span>
-        <div className="playback-track">
-          <input type="range" min="0" max={duration || 0} step="0.1"
+        <span>{formatTime(shownTime * 1000)}</span>
+        <div className="playback-track"
+          style={{
+            "--played": `${duration ? (Math.min(shownTime, duration) / duration) * 100 : 0}%`,
+            "--loaded": `${duration ? (Math.min(Math.max(loadedTo, shownTime), duration) / duration) * 100 : 0}%`,
+          }}>
+          <input type="range" min="0" max={duration || 0} step="0.05"
             aria-label="Seek" disabled={uploading || !duration}
-            value={Math.min(time, duration || 0)}
-            onChange={(event) => seekTo(Number(event.target.value))} />
+            value={Math.min(shownTime, duration || 0)}
+            onPointerDown={startScrub}
+            onChange={(event) => moveScrub(Number(event.target.value))} />
           {duration > 0 && notes.map((note) => (
             <button type="button" key={note.id} className="playback-dot"
               style={{ left: `${Math.min(100, (note.videoTimeMs / 1000 / duration) * 100)}%` }}
@@ -991,16 +1243,87 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   );
 }
 
+const HAVE_FUTURE_DATA = 3;
+
+// One angle's still for a moment of its own video (seconds), out of the
+// sheets the server made (see the server's recordings/scrubFrames.js).
+// Nothing until its sheet has downloaded: the paused video shows meanwhile.
+function ScrubStill({ scrub, at, onLoaded }) {
+  const frame = frameAt(scrub, at);
+  const perSheet = scrub.cols * scrub.rows;
+  const sheet = scrub.sheets[Math.floor(frame / perSheet)];
+  if (!loadSheet(sheet, onLoaded)) return null;
+  const index = frame % perSheet;
+  const col = index % scrub.cols;
+  const row = Math.floor(index / scrub.cols);
+  return (
+    <div className="playback-still" aria-hidden="true" style={{
+      backgroundImage: `url("${sheet}")`,
+      backgroundSize: `${scrub.cols * 100}% ${scrub.rows * 100}%`,
+      backgroundPosition: `${scrub.cols > 1 ? (col / (scrub.cols - 1)) * 100 : 0}% ${scrub.rows > 1 ? (row / (scrub.rows - 1)) * 100 : 0}%`,
+    }} />
+  );
+}
+
+function frameAt(scrub, at) {
+  return Math.max(0, Math.min(scrub.frames - 1, Math.floor(at * scrub.fps)));
+}
+
+function sheetAt(scrub, at) {
+  return scrub.sheets[Math.floor(frameAt(scrub, at) / (scrub.cols * scrub.rows))];
+}
+
+const SHEET_RETRY_MS = 10_000;
+
+// Whether two links are to the same stored file (they can differ only in
+// their signature).
+function sameFile(a, b) {
+  return a.split("?")[0] === b.split("?")[0];
+}
+
+// How far ahead of the finger the next sheet starts downloading.
+const SHEET_AHEAD_S = 5;
+
+// Still sheets download only as a drag reaches them (each is 20 s of one
+// angle), and stay for the page's life. Returns whether [sheet] is ready,
+// starting it if not; [onLoaded] hears when it is.
+const sheetStates = new Map();
+function loadSheet(sheet, onLoaded) {
+  const state = sheetStates.get(sheet);
+  if (state === "loaded") return true;
+  // Failed recently (an expired link, offline): not asked for again on
+  // every move of the drag, only after a pause.
+  if (typeof state === "number") {
+    if (Date.now() - state < SHEET_RETRY_MS) return false;
+  } else if (state) {
+    state.add(onLoaded);
+    return false;
+  }
+  const waiting = new Set([onLoaded]);
+  sheetStates.set(sheet, waiting);
+  // Fetched the way the tile's CSS background will be (no CORS, with the
+  // login cookie), so that reuses this download.
+  const image = new Image();
+  image.onload = () => {
+    sheetStates.set(sheet, "loaded");
+    waiting.forEach((callback) => callback());
+  };
+  image.onerror = () => sheetStates.set(sheet, Date.now());
+  image.src = sheet;
+  return false;
+}
+
 /// Resolves true once every video can play from where it is without
 /// stopping right away, or false if one still can't after `timeoutMs`.
-function untilReady(videos, timeoutMs = 15000) {
-  const HAVE_FUTURE_DATA = 3;
+/// `onReady` hears about each one as it gets there.
+function untilReady(videos, timeoutMs = 15000, onReady = () => {}) {
   const waiting = videos.filter((video) => video.readyState < HAVE_FUTURE_DATA);
   if (waiting.length === 0) return Promise.resolve(true);
   return new Promise((resolve) => {
     let left = waiting.length;
-    const onReady = (event) => {
-      event.currentTarget.removeEventListener("canplay", onReady);
+    const onCanPlay = (event) => {
+      event.currentTarget.removeEventListener("canplay", onCanPlay);
+      onReady(event.currentTarget);
       left -= 1;
       if (left === 0) {
         clearTimeout(timer);
@@ -1008,10 +1331,10 @@ function untilReady(videos, timeoutMs = 15000) {
       }
     };
     const timer = setTimeout(() => {
-      waiting.forEach((video) => video.removeEventListener("canplay", onReady));
+      waiting.forEach((video) => video.removeEventListener("canplay", onCanPlay));
       resolve(false);
     }, timeoutMs);
-    waiting.forEach((video) => video.addEventListener("canplay", onReady));
+    waiting.forEach((video) => video.addEventListener("canplay", onCanPlay));
   });
 }
 
@@ -1032,6 +1355,13 @@ const css = `
     width: 38px; height: 38px; border-radius: 8px; color: var(--accent);
   }
   .playback-page .playback-download:hover { background: rgba(255,255,255,0.08); }
+  .playback-page .playback-delete {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+    width: 38px; height: 38px; border-radius: 8px; border: none; background: none;
+    color: #e5484d; cursor: pointer; padding: 0;
+  }
+  .playback-page .playback-delete:hover { background: rgba(229,72,77,0.12); }
+  .playback-page .playback-delete:disabled { opacity: 0.5; cursor: default; }
   .playback-box { position: relative; }
   .playback-box:fullscreen { background: #050505; padding: 10px 20px 8px; box-sizing: border-box; overflow: hidden; }
   .playback-box::backdrop { background: #050505; }
@@ -1094,6 +1424,14 @@ const css = `
   @keyframes playback-spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .playback-spinner { animation-duration: 3s; } }
   .playback-grid figcaption .playback-preview-note { flex-shrink: 0; color: #fc6; }
+  .playback-upload {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px;
+    background: rgba(255,255,255,0.12); pointer-events: none;
+  }
+  .playback-upload span { display: block; height: 100%; background: var(--accent); transition: width 0.4s; }
+  .playback-upload-stalled span { background: #8a8a8a; }
+  .playback-upload-status { color: #e8e8e8; font-size: 1rem; font-weight: 700; }
+  .playback-upload-status-stalled { color: #8a8a8a; font-weight: 600; }
   .playback-grid figcaption { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 8px; background: rgba(0,0,0,0.55); color: #ddd; font-size: 0.7rem; pointer-events: none; }
   .playback-grid figcaption span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .playback-panel-picker { z-index: 2; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 220px; max-width: calc(100% - 24px); max-height: calc(100% - 16px); overflow: auto; padding: 4px; border: 1px solid #555; border-radius: 6px; background: #222; box-sizing: border-box; }
@@ -1122,9 +1460,19 @@ const css = `
   .playback-transport .playback-controls { flex: 0 0 auto; gap: 6px; }
   .playback-seek { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; }
   .playback-seek span { color: #999; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-  .playback-buffering { margin: 0 0 0.5rem; text-align: center; color: #aaa; font-size: 0.85rem; }
+  .playback-still { position: absolute; inset: 0; z-index: 1; background-color: #000; background-repeat: no-repeat; pointer-events: none; }
+  .playback-tile-loading { position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: rgba(0,0,0,0.45); color: #ddd; font-size: 0.8rem; font-weight: 600; pointer-events: none; opacity: 0; animation: playback-appear 0.15s 0.4s forwards; }
+  @keyframes playback-appear { to { opacity: 1; } }
   .playback-track { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
-  .playback-seek input { flex: 1; min-width: 0; margin: 0; accent-color: var(--accent); cursor: pointer; }
+  /* The seek bar: a rounded track filled up to the playhead, with a round
+     handle that grows while held. */
+  .playback-seek input { flex: 1; min-width: 0; margin: 0; height: 22px; cursor: pointer; background: transparent; -webkit-appearance: none; appearance: none; }
+  .playback-seek input::-webkit-slider-runnable-track { height: 5px; border-radius: 3px; background: linear-gradient(to right, var(--accent) var(--played), #8a8a8a var(--played), #8a8a8a var(--loaded), #3a3a3a var(--loaded)); }
+  .playback-seek input::-moz-range-track { height: 5px; border-radius: 3px; background: linear-gradient(to right, #8a8a8a var(--loaded), #3a3a3a var(--loaded)); }
+  .playback-seek input::-moz-range-progress { height: 5px; border-radius: 3px; background: var(--accent); }
+  .playback-seek input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -4.5px; border-radius: 50%; background: #fff; border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.5); transition: transform 0.1s; }
+  .playback-seek input::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none; box-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+  .playback-seek input:active::-webkit-slider-thumb { transform: scale(1.3); }
   /* A blue dot on the bar for each comment; click it to jump there. */
   .playback-box .playback-dot {
     position: absolute; top: 50%; width: 11px; height: 11px; padding: 0;

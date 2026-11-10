@@ -1,5 +1,5 @@
+import crypto from "node:crypto";
 import { Router } from "express";
-import bcrypt from "bcryptjs";
 
 import { pool } from "../db/pool.js";
 import {
@@ -18,10 +18,28 @@ const GROUP_ID_PATTERN = /^[A-Za-z0-9]+$/;
 const COLOR_ERROR = "Pick one of the team colors.";
 const WEB_ORIGIN = (process.env.WEB_ORIGIN || "http://localhost:5173").replace(/\/$/, "");
 
-// The link members share to invite people. It opens the web app's join page;
-// a private group still asks for its password there.
-function inviteUrl(groupId) {
-  return `${WEB_ORIGIN}/join/${encodeURIComponent(groupId)}`;
+// Invite codes: six characters that are hard to mix up when read out or
+// typed (no 0/O, 1/I/L). Shown as ABC-DEF.
+const INVITE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+const INVITE_LENGTH = 6;
+
+function newInviteCode() {
+  return Array.from({ length: INVITE_LENGTH },
+    () => INVITE_ALPHABET[crypto.randomInt(INVITE_ALPHABET.length)]).join("");
+}
+
+// A code as typed or pasted: any case, with or without the dash. Codes made
+// before this alphabet (from the backfill) can hold 0 and 1, so the letters
+// people mistake for them are read as them; new codes never contain O, I or L.
+export function normalizeInviteCode(text) {
+  return String(text ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "")
+    .replace(/O/g, "0").replace(/[IL]/g, "1");
+}
+
+// The link members share to invite people. It opens the web app's join page,
+// which hands it to the phone app when that's installed.
+function inviteUrl(code) {
+  return `${WEB_ORIGIN}/join/${encodeURIComponent(code)}`;
 }
 
 //shape a group before sending it to the frontend
@@ -29,24 +47,46 @@ function publicGroup(row) {
   return {
     id: row.group_id,
     name: row.name,
-    isPublic: row.is_public,
     owner: Number(row.owner_id),
     primaryColor: row.primary_color,
-    inviteUrl: inviteUrl(row.group_id),
+    inviteCode: row.invite_code,
+    inviteUrl: row.invite_code ? inviteUrl(row.invite_code) : null,
     createdAt: row.created_at,
     joinedAt: row.joined_at,
     role: row.role,
   };
 }
 
-//shape the smaller group search result
-function groupSearchResult(row) {
-  return {
-    id: row.group_id,
-    name: row.name,
-    isPublic: row.is_public,
-    isMember: row.is_member,
-  };
+// Wrong invite codes per person, so codes can't be guessed by trying many:
+// past MAX_CODE_MISSES in CODE_MISS_WINDOW_MS, lookups wait out the window.
+// In memory: a restart starts the count over, which is fine for this.
+const MAX_CODE_MISSES = 10;
+const CODE_MISS_WINDOW_MS = 10 * 60 * 1000;
+const codeMisses = new Map();
+
+function tooManyMisses(userId) {
+  const recent = (codeMisses.get(userId) ?? []).filter((at) => Date.now() - at < CODE_MISS_WINDOW_MS);
+  codeMisses.set(userId, recent);
+  return recent.length >= MAX_CODE_MISSES;
+}
+
+function recordMiss(userId) {
+  codeMisses.get(userId)?.push(Date.now()) ?? codeMisses.set(userId, [Date.now()]);
+}
+
+// The group an invite code belongs to, with whether this user is in it.
+// null when no group has the code.
+async function groupForCode(code, userId) {
+  const { rows } = await pool.query(
+    `SELECT g.group_id, g.name, g.owner_id, g.primary_color, g.created_at, g.invite_code,
+            gm.role, gm.joined_at,
+            (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.group_id) AS member_count
+       FROM groups g
+       LEFT JOIN group_members gm ON gm.group_id = g.group_id AND gm.user_id = $2
+      WHERE g.invite_code = $1`,
+    [code, userId]
+  );
+  return rows[0] ?? null;
 }
 
 //all group routes require a logged-in user
@@ -59,7 +99,7 @@ groupRouter.get("/", async (req, res) => {
       // In the order the user dragged them into (users.settings.groupOrder);
       // groups not placed yet, like a newly joined one, come after, newest
       // first.
-      `SELECT g.group_id, g.name, g.is_public, g.owner_id,
+      `SELECT g.group_id, g.name, g.owner_id, g.invite_code,
               g.primary_color, g.created_at, gm.role, gm.joined_at
          FROM groups g
          JOIN group_members gm ON gm.group_id = g.group_id
@@ -80,76 +120,26 @@ groupRouter.get("/", async (req, res) => {
   }
 });
 
-//search for up to five groups by ID
-groupRouter.get("/search", async (req, res) => {
-  const query = String(req.query.q ?? "").trim();
-
-  if (!query) {
-    return res.json({ groups: [] });
+// What an invite shows before joining: the group's name, color and size.
+// The code is the invitation, so anyone signed in who has it can look.
+groupRouter.get("/invites/:code", async (req, res) => {
+  const code = normalizeInviteCode(req.params.code);
+  if (tooManyMisses(req.user.id)) {
+    return res.status(429).json({ error: "Too many wrong codes. Try again in a few minutes." });
   }
-  if (!GROUP_ID_PATTERN.test(query)) {
-    return res.status(400).json({
-      error: "Group ID must contain only letters and numbers.",
-    });
-  }
-
   try {
-    const { rows } = await pool.query(
-      `SELECT g.group_id, g.name, g.is_public,
-              EXISTS (
-                SELECT 1
-                  FROM group_members gm
-                 WHERE gm.group_id = g.group_id
-                   AND gm.user_id = $2
-              ) AS is_member
-         FROM groups g
-        WHERE LOWER(g.group_id) LIKE '%' || LOWER($1) || '%'
-        ORDER BY
-          CASE
-            WHEN LOWER(g.group_id) = LOWER($1) THEN 0
-            WHEN LOWER(g.group_id) LIKE LOWER($1) || '%' THEN 1
-            ELSE 2
-          END,
-          LENGTH(g.group_id),
-          g.group_id
-        LIMIT 5`,
-      [query, req.user.id]
-    );
-
-    res.json({ groups: rows.map(groupSearchResult) });
-  } catch (err) {
-    console.error("Unable to search groups:", err);
-    res.status(500).json({ error: "Unable to search groups." });
-  }
-});
-
-//list members in join order, with the creator first
-// What an invite link shows before joining: the group's name, color and
-// whether it needs a password. Any signed-in user can look; the ID is the
-// invitation.
-groupRouter.get("/:id/invite", async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT g.group_id, g.name, g.is_public, g.primary_color,
-              EXISTS (
-                SELECT 1 FROM group_members gm
-                 WHERE gm.group_id = g.group_id AND gm.user_id = $2
-              ) AS is_member
-         FROM groups g
-        WHERE LOWER(g.group_id) = LOWER($1)`,
-      [req.params.id, req.user.id]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({ error: "This invite link doesn't match a group." });
+    const row = code ? await groupForCode(code, req.user.id) : null;
+    if (!row) {
+      recordMiss(req.user.id);
+      return res.status(404).json({ error: "No group has that invite. Check the code, or ask for a new link." });
     }
-    const row = rows[0];
     res.json({
       group: {
         id: row.group_id,
         name: row.name,
-        isPublic: row.is_public,
         primaryColor: row.primary_color,
-        isMember: row.is_member,
+        memberCount: Number(row.member_count),
+        isMember: Boolean(row.role),
       },
     });
   } catch (err) {
@@ -157,6 +147,162 @@ groupRouter.get("/:id/invite", async (req, res) => {
     res.status(500).json({ error: "Unable to load invite." });
   }
 });
+
+// Join a group with its invite. Joining one you're already in just returns it.
+groupRouter.post("/invites/:code/join", async (req, res) => {
+  const code = normalizeInviteCode(req.params.code);
+  if (tooManyMisses(req.user.id)) {
+    return res.status(429).json({ error: "Too many wrong codes. Try again in a few minutes." });
+  }
+  try {
+    const row = code ? await groupForCode(code, req.user.id) : null;
+    if (!row) {
+      recordMiss(req.user.id);
+      return res.status(404).json({ error: "No group has that invite. Check the code, or ask for a new link." });
+    }
+    if (row.role) return res.json({ group: publicGroup(row) });
+
+    const { rows } = await pool.query(
+      `INSERT INTO group_members (group_id, user_id, role)
+       VALUES ($1, $2, 'member')
+       ON CONFLICT (group_id, user_id) DO UPDATE SET role = group_members.role
+       RETURNING role, joined_at`,
+      [row.group_id, req.user.id]
+    );
+    // An invite answers any request they'd sent.
+    await pool.query("DELETE FROM group_join_requests WHERE group_id = $1 AND user_id = $2",
+      [row.group_id, req.user.id]);
+    res.status(201).json({ group: publicGroup({ ...row, ...rows[0] }) });
+  } catch (err) {
+    console.error("Unable to join group:", err);
+    res.status(500).json({ error: "Unable to join group." });
+  }
+});
+
+// A new invite code for the group (admins and the owner): the old code,
+// link and QR stop working.
+groupRouter.post("/:id/invite/reset", async (req, res) => {
+  try {
+    const role = await getGroupRole(req.params.id, req.user.id);
+    if (!atLeast(role, "admin")) {
+      return res.status(403).json({ error: "Only group admins can reset the invite." });
+    }
+    for (let tries = 0; ; tries += 1) {
+      try {
+        const { rows } = await pool.query(
+          `UPDATE groups g SET invite_code = $2
+             FROM group_members gm
+            WHERE g.group_id = $1 AND gm.group_id = g.group_id AND gm.user_id = $3
+            RETURNING g.group_id, g.name, g.owner_id, g.primary_color, g.created_at,
+                      g.invite_code, gm.role, gm.joined_at`,
+          [req.params.id, newInviteCode(), req.user.id]
+        );
+        return res.json({ group: publicGroup(rows[0]) });
+      } catch (err) {
+        // Another group has that code: draw again.
+        if (err.code !== "23505" || tries >= 5) throw err;
+      }
+    }
+  } catch (err) {
+    console.error("Unable to reset invite:", err);
+    res.status(500).json({ error: "Unable to reset the invite." });
+  }
+});
+
+// Ask to join a group by its exact ID, without an invite. An admin approves
+// it from the group's page.
+groupRouter.post("/requests", async (req, res) => {
+  const id = String(req.body?.groupId ?? "").trim();
+  if (!id || !GROUP_ID_PATTERN.test(id)) {
+    return res.status(400).json({ error: "Enter the group's ID: letters and numbers only." });
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT g.group_id, g.name, gm.role
+         FROM groups g
+         LEFT JOIN group_members gm ON gm.group_id = g.group_id AND gm.user_id = $2
+        WHERE LOWER(g.group_id) = LOWER($1)`,
+      [id, req.user.id]
+    );
+    const group = rows[0];
+    if (!group) {
+      return res.status(404).json({ error: "No group has that ID. Check it with the group's coach." });
+    }
+    if (group.role) {
+      return res.json({ status: "member", group: { id: group.group_id, name: group.name } });
+    }
+    await pool.query(
+      `INSERT INTO group_join_requests (group_id, user_id) VALUES ($1, $2)
+       ON CONFLICT (group_id, user_id) DO NOTHING`,
+      [group.group_id, req.user.id]
+    );
+    res.status(201).json({ status: "requested", group: { id: group.group_id, name: group.name } });
+  } catch (err) {
+    console.error("Unable to request to join:", err);
+    res.status(500).json({ error: "Unable to send the request." });
+  }
+});
+
+// The group's waiting requests, oldest first (admins and the owner).
+groupRouter.get("/:id/requests", async (req, res) => {
+  try {
+    const role = await getGroupRole(req.params.id, req.user.id);
+    if (!atLeast(role, "admin")) {
+      return res.status(403).json({ error: "Only group admins can see requests." });
+    }
+    const { rows } = await pool.query(
+      `SELECT r.user_id, r.requested_at, u.display_name, u.email
+         FROM group_join_requests r JOIN users u ON u.user_id = r.user_id
+        WHERE r.group_id = $1
+        ORDER BY r.requested_at, r.user_id`,
+      [req.params.id]
+    );
+    res.json({ requests: rows.map((row) => ({
+      userId: Number(row.user_id),
+      name: row.display_name || row.email.split("@")[0],
+      email: row.email,
+      requestedAt: row.requested_at,
+    })) });
+  } catch (err) {
+    console.error("Unable to load requests:", err);
+    res.status(500).json({ error: "Unable to load requests." });
+  }
+});
+
+// Approve (POST .../approve) or decline (DELETE) a request.
+async function answerRequest(req, res) {
+  const userId = Number(req.params.userId);
+  const approving = req.method === "POST";
+  if (!Number.isSafeInteger(userId) || userId <= 0) {
+    return res.status(400).json({ error: "Pick a request." });
+  }
+  try {
+    const role = await getGroupRole(req.params.id, req.user.id);
+    if (!atLeast(role, "admin")) {
+      return res.status(403).json({ error: "Only group admins can answer requests." });
+    }
+    const { rowCount } = await pool.query(
+      "DELETE FROM group_join_requests WHERE group_id = $1 AND user_id = $2",
+      [req.params.id, userId]
+    );
+    if (rowCount === 0) {
+      return res.status(404).json({ error: "That request was already answered." });
+    }
+    if (approving) {
+      await pool.query(
+        `INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, 'member')
+         ON CONFLICT (group_id, user_id) DO NOTHING`,
+        [req.params.id, userId]
+      );
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("Unable to answer request:", err);
+    res.status(500).json({ error: "Unable to answer the request." });
+  }
+}
+groupRouter.post("/:id/requests/:userId/approve", answerRequest);
+groupRouter.delete("/:id/requests/:userId", answerRequest);
 
 groupRouter.get("/:id/members", async (req, res) => {
   try {
@@ -254,53 +400,55 @@ async function changeMember(req, res) {
 groupRouter.patch("/:id/members/:memberId", changeMember);
 groupRouter.delete("/:id/members/:memberId", changeMember);
 
-//create a group and make its owner an admin
+// A group's ID when its creator doesn't pick one: its name in lowercase
+// letters and numbers, then three random characters so names can repeat
+// ("Dance Team" → danceteam7k2). People only see it when asking to join.
+async function freeGroupId(name) {
+  const base = name.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 16) || "group";
+  for (let tries = 0; tries < 10; tries += 1) {
+    const suffix = Array.from({ length: 3 },
+      () => "abcdefghjkmnpqrstuvwxyz23456789"[crypto.randomInt(31)]).join("");
+    const candidate = `${base}${suffix}`;
+    const { rowCount } = await pool.query(
+      "SELECT 1 FROM groups WHERE LOWER(group_id) = $1", [candidate]);
+    if (rowCount === 0) return candidate;
+  }
+  throw new Error("No free group ID.");
+}
+
+//create a group and make its owner an admin. The ID is made from the name
+//unless one is sent (older apps still ask people to pick one).
 groupRouter.post("/", async (req, res) => {
-  const id = String(req.body?.id ?? "").trim();
+  let id = String(req.body?.id ?? "").trim();
   const name = String(req.body?.name ?? "").trim();
-  const isPublic = req.body?.isPublic;
-  const password = String(req.body?.password ?? "");
   const primaryColor = teamColor(req.body?.primaryColor ?? DEFAULT_TEAM_COLOR);
 
   if (!name) {
     return res.status(400).json({ error: "Group name is required." });
   }
-  if (!id || !GROUP_ID_PATTERN.test(id)) {
+  if (id && !GROUP_ID_PATTERN.test(id)) {
     return res.status(400).json({
       error: "Group ID must contain only letters and numbers.",
-    });
-  }
-  if (typeof isPublic !== "boolean") {
-    return res.status(400).json({ error: "Group visibility is required." });
-  }
-  if (!isPublic && !password.trim()) {
-    return res.status(400).json({
-      error: "Private groups require a password.",
     });
   }
   if (!primaryColor) {
     return res.status(400).json({ error: COLOR_ERROR });
   }
 
-  //public groups do not save a password
-  const passwordHash = isPublic
-    ? null
-    : await bcrypt.hash(password, 12);
-
   //save the group and owner membership together
   let client;
   try {
+    if (!id) id = await freeGroupId(name);
     client = await pool.connect();
     await client.query("BEGIN");
 
+    // A code another group has (rare) fails the insert like a taken ID
+    // would; the client tries again.
     const { rows } = await client.query(
-      `INSERT INTO groups (
-         group_id, name, is_public, password_hash, owner_id, primary_color
-       )
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING group_id, name, is_public, owner_id,
-                 primary_color, created_at`,
-      [id, name, isPublic, passwordHash, req.user.id, primaryColor]
+      `INSERT INTO groups (group_id, name, owner_id, primary_color, invite_code)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING group_id, name, owner_id, primary_color, created_at, invite_code`,
+      [id, name, req.user.id, primaryColor, newInviteCode()]
     );
 
     await client.query(
@@ -317,7 +465,11 @@ groupRouter.post("/", async (req, res) => {
     if (client) await client.query("ROLLBACK");
 
     if (err.code === "23505") {
-      return res.status(409).json({ error: "That group ID already exists." });
+      return res.status(409).json({
+        error: err.constraint === "groups_invite_code_idx"
+          ? "Couldn't make an invite for the group. Try again."
+          : "That group ID already exists.",
+      });
     }
 
     console.error("Unable to create group:", err);
@@ -330,11 +482,11 @@ groupRouter.post("/", async (req, res) => {
 const MAX_GROUP_NAME_LENGTH = 100; // groups.name is VARCHAR(100)
 
 // Update a group. Admins and the owner can change the team color (SCRUM-71);
-// only the owner can rename the group or change its privacy and password.
+// only the owner can rename the group.
 groupRouter.patch("/:id", async (req, res) => {
   const body = req.body ?? {};
   const wantsColor = body.primaryColor !== undefined;
-  const wantsDetails = ["name", "isPublic", "password"].some((key) => body[key] !== undefined);
+  const wantsDetails = body.name !== undefined;
   if (!wantsColor && !wantsDetails) {
     return res.status(400).json({ error: "Nothing to update." });
   }
@@ -349,10 +501,6 @@ groupRouter.patch("/:id", async (req, res) => {
       error: `Group name must be 1 to ${MAX_GROUP_NAME_LENGTH} characters.`,
     });
   }
-  if (body.isPublic !== undefined && typeof body.isPublic !== "boolean") {
-    return res.status(400).json({ error: "Group visibility is invalid." });
-  }
-  const password = body.password === undefined ? "" : String(body.password);
 
   try {
     const role = await getGroupRole(req.params.id, req.user.id);
@@ -363,41 +511,21 @@ groupRouter.patch("/:id", async (req, res) => {
     }
     if (wantsDetails && role !== "owner") {
       return res.status(403).json({
-        error: "Only the group owner can change the group's name or privacy.",
+        error: "Only the group owner can rename the group.",
       });
-    }
-
-    const { rows: current } = await pool.query(
-      "SELECT is_public, password_hash FROM groups WHERE group_id = $1",
-      [req.params.id]
-    );
-    const isPublic = body.isPublic ?? current[0].is_public;
-    // Public groups keep no password; a private one keeps its current
-    // password unless a new one is sent.
-    let passwordHash = null;
-    if (!isPublic) {
-      if (password.trim()) {
-        passwordHash = await bcrypt.hash(password, 12);
-      } else if (current[0].password_hash) {
-        passwordHash = current[0].password_hash;
-      } else {
-        return res.status(400).json({ error: "Private groups require a password." });
-      }
     }
 
     const { rows } = await pool.query(
       `UPDATE groups g
           SET primary_color = COALESCE($2, g.primary_color),
-              name = COALESCE($3, g.name),
-              is_public = $4,
-              password_hash = $5
+              name = COALESCE($3, g.name)
          FROM group_members gm
         WHERE g.group_id = $1
           AND gm.group_id = g.group_id
-          AND gm.user_id = $6
-        RETURNING g.group_id, g.name, g.is_public, g.owner_id,
+          AND gm.user_id = $4
+        RETURNING g.group_id, g.name, g.owner_id, g.invite_code,
                   g.primary_color, g.created_at, gm.role, gm.joined_at`,
-      [req.params.id, primaryColor, name, isPublic, passwordHash, req.user.id]
+      [req.params.id, primaryColor, name, req.user.id]
     );
     res.json({ group: publicGroup(rows[0]) });
   } catch (err) {
@@ -467,7 +595,7 @@ groupRouter.post("/:id/transfer", async (req, res) => {
     await client.query("UPDATE groups SET owner_id = $2 WHERE group_id = $1",
       [req.params.id, newOwnerId]);
     const { rows } = await client.query(
-      `SELECT g.group_id, g.name, g.is_public, g.owner_id, g.primary_color,
+      `SELECT g.group_id, g.name, g.owner_id, g.primary_color, g.invite_code,
               g.created_at, gm.role, gm.joined_at
          FROM groups g
          JOIN group_members gm ON gm.group_id = g.group_id AND gm.user_id = $2
@@ -507,7 +635,7 @@ groupRouter.delete("/:id", async (req, res) => {
       [req.params.id]
     );
     const { rows: videos } = await client.query(
-      `SELECT v.file_id, v.preview_file_id, v.thumbnail_file_id FROM recording_session_videos v
+      `SELECT v.file_id, v.preview_file_id, v.thumbnail_file_id, v.scrub FROM recording_session_videos v
          JOIN recording_sessions rs ON rs.id = v.session_id
         WHERE rs.group_id = $1 AND v.file_id IS NOT NULL`,
       [req.params.id]
@@ -527,118 +655,5 @@ groupRouter.delete("/:id", async (req, res) => {
     res.status(500).json({ error: "Unable to delete group." });
   } finally {
     client.release();
-  }
-});
-
-
-//join a group and check its password when private
-const MAX_PASSWORD_TRIES = 5;
-const LOCKOUT_MINUTES = 15;
-
-// Counts a wrong group password. Misses older than the lockout window start
-// over; the fifth one locks this person out of joining the group for
-// LOCKOUT_MINUTES. Returns how many tries are left (0 once locked).
-async function recordWrongPassword(groupId, userId) {
-  const { rows } = await pool.query(
-    `INSERT INTO group_join_attempts (group_id, user_id, failures, last_failed_at)
-     VALUES ($1, $2, 1, NOW())
-     ON CONFLICT (group_id, user_id) DO UPDATE
-       SET failures = CASE
-             WHEN group_join_attempts.last_failed_at < NOW() - make_interval(mins => $3)
-               OR group_join_attempts.locked_until IS NOT NULL
-             THEN 1
-             ELSE group_join_attempts.failures + 1
-           END,
-           last_failed_at = NOW(),
-           locked_until = NULL
-     RETURNING failures`,
-    [groupId, userId, LOCKOUT_MINUTES]
-  );
-  const failures = rows[0].failures;
-  if (failures >= MAX_PASSWORD_TRIES) {
-    await pool.query(
-      `UPDATE group_join_attempts
-          SET locked_until = NOW() + make_interval(mins => $3), failures = 0
-        WHERE group_id = $1 AND user_id = $2`,
-      [groupId, userId, LOCKOUT_MINUTES]
-    );
-    return 0;
-  }
-  return MAX_PASSWORD_TRIES - failures;
-}
-
-groupRouter.post("/:id/join", async (req, res) => {
-  const id = String(req.params.id ?? "").trim();
-  const password = String(req.body?.password ?? "");
-
-  if (!id || !GROUP_ID_PATTERN.test(id)) {
-    return res.status(400).json({ error: "Group ID is invalid." });
-  }
-
-  try {
-    const { rows } = await pool.query(
-      `SELECT g.group_id, g.name, g.is_public, g.password_hash, g.owner_id,
-              g.primary_color, g.created_at, gm.role
-         FROM groups g
-         LEFT JOIN group_members gm
-           ON gm.group_id = g.group_id
-          AND gm.user_id = $2
-        WHERE LOWER(g.group_id) = LOWER($1)`,
-      [id, req.user.id]
-    );
-
-    const group = rows[0];
-    if (!group) {
-      return res.status(404).json({ error: "Could not find group." });
-    }
-    if (group.role) {
-      return res.json({ group: publicGroup(group) });
-    }
-
-    if (!group.is_public) {
-      const { rows: attempts } = await pool.query(
-        `SELECT CEIL(EXTRACT(EPOCH FROM (locked_until - NOW())) / 60) AS minutes_left
-           FROM group_join_attempts
-          WHERE group_id = $1 AND user_id = $2 AND locked_until > NOW()`,
-        [group.group_id, req.user.id]
-      );
-      if (attempts.length > 0) {
-        const minutes = Math.max(1, Number(attempts[0].minutes_left));
-        return res.status(429).json({
-          error: `Too many wrong passwords. Try again in ${minutes} minute${minutes === 1 ? "" : "s"}.`,
-        });
-      }
-
-      const passwordMatches = await bcrypt.compare(
-        password,
-        group.password_hash
-      );
-      if (!passwordMatches) {
-        const triesLeft = await recordWrongPassword(group.group_id, req.user.id);
-        return res.status(403).json({
-          error: triesLeft > 0
-            ? `Incorrect group password. ${triesLeft} ${triesLeft === 1 ? "try" : "tries"} left.`
-            : `Incorrect group password. Try again in ${LOCKOUT_MINUTES} minutes.`,
-        });
-      }
-      await pool.query(
-        "DELETE FROM group_join_attempts WHERE group_id = $1 AND user_id = $2",
-        [group.group_id, req.user.id]
-      );
-    }
-
-    await pool.query(
-      `INSERT INTO group_members (group_id, user_id, role)
-       VALUES ($1, $2, 'member')
-       ON CONFLICT (group_id, user_id) DO NOTHING`,
-      [group.group_id, req.user.id]
-    );
-
-    res.status(201).json({
-      group: publicGroup({ ...group, role: "member" }),
-    });
-  } catch (err) {
-    console.error("Unable to join group:", err);
-    res.status(500).json({ error: "Unable to join group." });
   }
 });

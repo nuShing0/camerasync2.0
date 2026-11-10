@@ -5,18 +5,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../api/groups_api.dart';
+import '../api/recordings_api.dart';
 import '../auth/auth_service.dart';
+import '../groups/group_labels.dart';
+import '../groups/invite_code.dart';
 import '../team_accent.dart';
 import '../theme.dart';
+import '../widgets/auto_refresh.dart';
 import '../widgets/create_group_dialog.dart';
 import '../widgets/empty_state.dart';
+import '../widgets/group_badge.dart';
+import '../widgets/invite_panel.dart';
+import '../widgets/invite_preview.dart';
 import 'group_settings_screen.dart';
+import 'join_group_screen.dart';
 
-/// Lists the user's groups and lets them open a group's sessions.
+/// Lists the user's groups as big cards in their team colors, each opening
+/// the group's page. Join group (an invite, or asking with the group's ID)
+/// and Create group sit at the top.
 class GroupsScreen extends StatefulWidget {
-  const GroupsScreen({super.key, required this.auth});
+  const GroupsScreen({super.key, required this.auth, this.refresh});
 
   final AuthService auth;
+
+  /// Ticks when a group was joined somewhere else, like from an invite
+  /// link, so the list reloads.
+  final Listenable? refresh;
 
   @override
   State<GroupsScreen> createState() => _GroupsScreenState();
@@ -24,30 +38,32 @@ class GroupsScreen extends StatefulWidget {
 
 class _GroupsScreenState extends State<GroupsScreen> {
   late final GroupsApi _groupsApi = GroupsApi(widget.auth.api);
+  late final RecordingsApi _recordingsApi = RecordingsApi(widget.auth.api);
 
   List<Group> _groups = [];
   bool _loading = true;
   String? _error;
-  final TextEditingController _searchController = TextEditingController();
-  List<Group> _searchResults = [];
-  bool _searching = false;
-  String? _searchError;
-  Timer? _searchDebounce;
 
-  /// Search waits this long after the last keystroke, so typing a whole ID
-  /// sends one request instead of one per letter.
-  static const _searchDelay = Duration(milliseconds: 300);
+  /// Every session the user can see, for each card's live session or count.
+  /// Null until loaded, and left null if that fails: the cards just go
+  /// without.
+  List<RecordingSession>? _sessions;
+
+  /// Keeps the live dots current while the tab is open.
+  late final AutoRefresher _refresher;
 
   @override
   void initState() {
     super.initState();
     _loadGroups();
+    widget.refresh?.addListener(_loadGroups);
+    _refresher = AutoRefresher(const Duration(seconds: 20), _loadSessions);
   }
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
-    _searchController.dispose();
+    widget.refresh?.removeListener(_loadGroups);
+    _refresher.dispose();
     super.dispose();
   }
 
@@ -56,6 +72,7 @@ class _GroupsScreenState extends State<GroupsScreen> {
       _loading = true;
       _error = null;
     });
+    unawaited(_loadSessions());
 
     try {
       final groups = await _groupsApi.getMyGroups();
@@ -73,98 +90,37 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
-  void _onSearchChanged(String text) {
-    setState(() {}); // shows or hides the clear button
-    _searchDebounce?.cancel();
-    _searchDebounce = Timer(_searchDelay, () => _searchGroups(text));
-  }
-
-  Future<void> _searchGroups(String query) async {
-    final q = query.trim();
-    if (q.isEmpty) {
-      setState(() {
-        _searchResults = [];
-        _searchError = null;
-        _searching = false;
-      });
-      return;
-    }
-
-    setState(() {
-      _searching = true;
-      _searchError = null;
-    });
-
+  Future<void> _loadSessions() async {
     try {
-      final results = await _groupsApi.searchGroups(q);
-      // A slower reply for an older query must not replace newer results.
-      if (!mounted || q != _searchController.text.trim()) return;
-      setState(() {
-        _searchResults = results;
-        _searching = false;
-      });
-    } on ApiException catch (e) {
-      if (!mounted || q != _searchController.text.trim()) return;
-      setState(() {
-        _searchError = e.message;
-        _searching = false;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _searchError = 'Search failed.';
-        _searching = false;
-      });
+      final sessions = await _recordingsApi.getSessions();
+      if (mounted) setState(() => _sessions = sessions);
+    } on ApiException {
+      // The cards show no session line; the next refresh tries again.
     }
   }
 
-  Future<void> _joinGroup(BuildContext context, Group group) async {
-    if (group.isMember) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('You are already a member of ${group.name}')));
-      return;
-    }
+  Future<void> _join() async {
+    final result = await showJoinGroupSheet(context, _groupsApi);
+    if (result == null || !mounted) return;
+    final joined = result.joined;
+    if (joined == null) return _openGroupById(result.id);
 
-    String password = '';
-    if (!group.isPublic) {
-      final entered = await showDialog<String?>(
-        context: context,
-        builder: (ctx) {
-          final ctl = TextEditingController();
-          return AlertDialog(
-            title: Text('Join ${group.id}'),
-            content: TextField(
-              controller: ctl,
-              obscureText: true,
-              decoration: const InputDecoration(labelText: 'Group password'),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.of(ctx).pop(null), child: const Text('Cancel')),
-              FilledButton(onPressed: () => Navigator.of(ctx).pop(ctl.text), child: const Text('Join')),
-            ],
-          );
-        },
-      );
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('Joined ${joined.name}')));
+    await _loadGroups();
+    if (!mounted) return;
+    // A first group becomes the primary group, which colors the app.
+    TeamAccent.of(context).refresh();
+    await _openGroup(joined);
+  }
 
-      if (entered == null) return;
-      password = entered;
-    }
-
-    try {
-      final joined = await _groupsApi.joinGroup(group.id, password);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Joined ${joined.name}')));
-      await _loadGroups();
-      // A first group becomes the primary group, which colors the app.
-      if (mounted) TeamAccent.of(this.context).refresh();
-      // update search result locally
-      setState(() {
-        _searchResults = _searchResults.map((g) => g.id == group.id ? Group(id: g.id, name: g.name, isPublic: g.isPublic, isMember: true) : g).toList();
-      });
-    } on ApiException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
-    } catch (_) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Unable to join group.')));
-    }
+  Future<void> _openGroupById(String id) async {
+    Group? find() => _groups.where((g) => g.id == id).firstOrNull;
+    // Joined somewhere the list hasn't caught up with yet.
+    if (find() == null) await _loadGroups();
+    final group = find();
+    if (group == null || !mounted) return;
+    await _openGroup(group);
   }
 
   Future<void> _createGroup() async {
@@ -176,12 +132,17 @@ class _GroupsScreenState extends State<GroupsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Created ${created.name}')),
     );
-    await _loadGroups();
-    if (mounted) TeamAccent.of(context).refresh();
+    unawaited(_loadGroups());
+    TeamAccent.of(context).refresh();
+    await showInviteTeamSheet(context, created);
   }
 
   @override
   Widget build(BuildContext context) {
+    final team = TeamAccent.of(context);
+    final count = _groups.length;
+    const pill = StadiumBorder();
+
     return RefreshIndicator(
       onRefresh: _loadGroups,
       child: ListView(
@@ -192,105 +153,76 @@ class _GroupsScreenState extends State<GroupsScreen> {
             'Groups',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
+              fontSize: 30,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.5,
             ),
           ),
-          const SizedBox(height: 8),
-          const Text(
-            'Your groups let you share sessions and recordings with teammates.\nTap a group to view its sessions.',
-            style: TextStyle(color: kMuted, height: 1.5),
-          ),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: TextButton(
-              onPressed: _createGroup,
-              style: TextButton.styleFrom(padding: EdgeInsets.zero),
-              child: Text.rich(
-                TextSpan(
-                  text: "Don't have a group? ",
-                  style: const TextStyle(color: Colors.white),
-                  children: [
-                    TextSpan(
-                      text: 'Create one',
-                      style: TextStyle(
-                        color: TeamAccent.of(context).accent,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
+          if (count > 0) ...[
+            const SizedBox(height: 4),
+            Text(
+              [
+                '$count ${count == 1 ? 'group' : 'groups'}',
+                if (count > 1) 'hold to reorder',
+              ].join(' · '),
+              style: const TextStyle(color: kMuted, fontSize: 14),
+            ),
+          ],
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: _join,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1C1C1C),
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(48),
+                    shape: pill,
+                    textStyle: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                  child: const Text('Join group'),
                 ),
               ),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: _createGroup,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: team.fill,
+                    foregroundColor: team.ink,
+                    minimumSize: const Size.fromHeight(48),
+                    shape: pill,
+                    textStyle: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w700),
+                  ),
+                  icon: const Icon(Icons.add, size: 20),
+                  label: const Text('Create group'),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(height: 12),
-
-          // Search updates as you type.
-          TextField(
-            controller: _searchController,
-            decoration: InputDecoration(
-              hintText: 'Find a group by ID',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: _searchController.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'Clear search',
-                      icon: const Icon(Icons.close),
-                      onPressed: () {
-                        _searchController.clear();
-                        _onSearchChanged('');
-                      },
-                    ),
-              filled: true,
-              fillColor: const Color(0xFF121212),
-              border: const OutlineInputBorder(borderRadius: BorderRadius.zero),
-            ),
-            textCapitalization: TextCapitalization.none,
-            textInputAction: TextInputAction.search,
-            onChanged: _onSearchChanged,
-            onSubmitted: (text) {
-              _searchDebounce?.cancel();
-              _searchGroups(text);
-            },
-          ),
-          const SizedBox(height: 12),
-
-          if (_searching && _searchResults.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 12),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (_searchError != null)
-            _Notice(message: _searchError!, actionLabel: 'Retry', onAction: () => _searchGroups(_searchController.text))
-          else if (_searchResults.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            ..._searchResults.map((g) => _SearchResultCard(group: g, onJoin: () => _joinGroup(context, g))).toList(),
-            const Divider(color: Color(0xFF2A2A2A)),
-          ],
-
-          const SizedBox(height: 8),
-
-          const Text('My groups', style: TextStyle(color: kMuted)),
-          const SizedBox(height: 12),
-
-          if (_loading)
+          const SizedBox(height: 20),
+          if (_loading && _groups.isEmpty)
             const Padding(
               padding: EdgeInsets.only(top: 48),
               child: Center(child: CircularProgressIndicator()),
             )
           else if (_error != null)
-            _Notice(message: _error!, actionLabel: 'Retry', onAction: _loadGroups)
+            _Notice(
+                message: _error!, actionLabel: 'Retry', onAction: _loadGroups)
           else if (_groups.isEmpty)
             EmptyState(
               title: 'No groups yet',
-              message: "Search for your team's group by its ID above and "
-                  'join it, or create a new one for your team.',
+              message: "Tap Join group to enter your team's invite, or "
+                  'create a new one for your team.',
               actionLabel: 'Create a group',
               onAction: _createGroup,
             )
           else
-            // Long-press a group and drag it to change the order; the order
-            // is saved on the account, like on the web.
+            // Long-press a group (or grab its grip) and drag it to change
+            // the order; the order is saved on the account, like on the web.
             ReorderableListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -308,12 +240,12 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   return Transform.rotate(
                     angle: -0.02 * t,
                     child: Transform.scale(
-                      scale: 1 + 0.06 * t,
+                      scale: 1 + 0.04 * t,
                       child: Material(
                         color: Colors.transparent,
                         elevation: 16 * t,
                         shadowColor: Colors.black,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(20),
                         child: child,
                       ),
                     ),
@@ -328,7 +260,11 @@ class _GroupsScreenState extends State<GroupsScreen> {
                   index: i,
                   child: _GroupCard(
                     group: g,
-                    isPrimary: g.id == TeamAccent.of(context).primaryGroup?.id,
+                    index: i,
+                    role: groupRoleName(g, widget.auth.user?.id),
+                    isPrimary: g.id == team.primaryGroup?.id,
+                    sessions:
+                        _sessions?.where((s) => s.groupId == g.id).toList(),
                     onOpen: () => _openGroup(g),
                   ),
                 );
@@ -356,85 +292,244 @@ class _GroupsScreenState extends State<GroupsScreen> {
     }
   }
 
-  /// The group's page: its live session or starting one, its recordings,
-  /// and its settings.
+  /// The group's page: its live session or starting one, its sessions,
+  /// members and settings.
   Future<void> _openGroup(Group g) async {
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => GroupSettingsScreen(auth: widget.auth, group: g)),
+      MaterialPageRoute(
+          builder: (_) => GroupSettingsScreen(auth: widget.auth, group: g)),
     );
     // The color or roster may have changed there.
     if (mounted) _loadGroups();
   }
 }
 
+/// An invite link opened the app: the invite's preview over whatever is
+/// showing, to join from (or open the group, if the user is in it already).
+/// [onJoined] hears about a join, so the Groups tab can reload.
+Future<void> showInvitePreviewSheet(
+  BuildContext context,
+  AuthService auth,
+  String code, {
+  VoidCallback? onJoined,
+}) {
+  final api = GroupsApi(auth.api);
+  final navigator = Navigator.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  final team = TeamAccent.of(context);
+
+  Future<void> open(Group group) => navigator.push(MaterialPageRoute(
+      builder: (_) => GroupSettingsScreen(auth: auth, group: group)));
+
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: kBackground,
+    showDragHandle: true,
+    builder: (sheet) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              "You're invited",
+              style: TextStyle(
+                color: team.accent,
+                fontSize: 20,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text('Invite code ${formatInviteCode(code)}',
+                style: const TextStyle(color: kMuted)),
+            const SizedBox(height: 14),
+            InvitePreviewCard(
+              api: api,
+              code: code,
+              onJoined: (group) {
+                Navigator.of(sheet).pop();
+                messenger.showSnackBar(
+                    SnackBar(content: Text('Joined ${group.name}')));
+                onJoined?.call();
+                // A first group becomes the primary group.
+                team.refresh();
+                open(group);
+              },
+              onOpen: (id) async {
+                Navigator.of(sheet).pop();
+                try {
+                  final groups = await api.getMyGroups();
+                  final group = groups.where((g) => g.id == id).firstOrNull;
+                  if (group != null) await open(group);
+                } on ApiException catch (e) {
+                  messenger.showSnackBar(SnackBar(content: Text(e.message)));
+                }
+              },
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+/// One group: a big card in its team color with the user's role, its name
+/// and ID, and a footer with its live session or how many it's had. Tapping
+/// opens the group's page; the grip (or a long press anywhere) drags it.
 class _GroupCard extends StatelessWidget {
   const _GroupCard({
     required this.group,
+    required this.index,
+    required this.role,
     required this.isPrimary,
+    required this.sessions,
     required this.onOpen,
   });
 
   final Group group;
+
+  /// Its place in the list, for the grip's drag.
+  final int index;
+  final String role;
   final bool isPrimary;
+
+  /// The group's sessions, or null while they load.
+  final List<RecordingSession>? sessions;
   final VoidCallback onOpen;
 
-  /// The card is filled with the team color and opens the group's page,
-  /// matching the web's group tiles.
   @override
   Widget build(BuildContext context) {
     final fill = parseHexColor(group.primaryColor);
     final ink = fill == null ? Colors.white : inkOn(fill);
+    final soft = ink.withValues(alpha: 0.72);
 
-    return Card(
-      color: fill ?? const Color(0xFF1C1C1C),
-      margin: const EdgeInsets.only(bottom: 12),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onOpen,
-        child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 14, 10, 14),
-        child: Row(
-          children: [
-            // Shows the cards can be moved: long-press and drag.
-            Icon(Icons.drag_indicator, color: ink.withValues(alpha: 0.55)),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Wrap(
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 8,
-                    children: [
-                      Text(
-                        group.name,
-                        style: TextStyle(color: ink, fontSize: 16, fontWeight: FontWeight.w600),
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: fill ?? const Color(0xFF1C1C1C),
+        borderRadius: BorderRadius.circular(20),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onOpen,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 14, 8, 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          GroupBadge(label: role, ink: ink),
+                          if (isPrimary) GroupBadge(label: 'Primary', ink: ink),
+                        ],
                       ),
-                      if (isPrimary)
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: ink.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text('Primary',
-                              style: TextStyle(color: ink, fontSize: 11, fontWeight: FontWeight.w700)),
-                        ),
-                    ],
+                    ),
+                    // Shows the cards can be moved, and drags straight away.
+                    ReorderableDragStartListener(
+                      index: index,
+                      child: Padding(
+                        padding: const EdgeInsets.all(6),
+                        child: Icon(Icons.drag_indicator,
+                            semanticLabel: 'Drag to reorder',
+                            color: ink.withValues(alpha: 0.55)),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: Text(
+                    group.name,
+                    style: TextStyle(
+                      color: ink,
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.4,
+                      height: 1.15,
+                    ),
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    'Group ID: ${group.id}',
-                    style: TextStyle(color: fill == null ? kMuted : ink.withValues(alpha: 0.75)),
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(height: 14),
+                Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: Divider(
+                      height: 1,
+                      thickness: 1,
+                      color: ink.withValues(alpha: 0.18)),
+                ),
+                Row(
+                  children: [
+                    Expanded(child: _footer(ink, soft)),
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Icon(Icons.chevron_right,
+                          color: ink.withValues(alpha: 0.8)),
+                    ),
+                  ],
+                ),
+              ],
             ),
-            Icon(Icons.chevron_right, color: ink.withValues(alpha: 0.8)),
-          ],
-        ),
+          ),
         ),
       ),
+    );
+  }
+
+  /// The live session if there is one, else how many sessions and when the
+  /// last was.
+  Widget _footer(Color ink, Color soft) {
+    final sessions = this.sessions;
+    if (sessions == null) return const SizedBox.shrink();
+    final live = sessions.where((s) => s.isActive).firstOrNull;
+    if (live != null) {
+      return Row(
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: kLiveRed,
+              shape: BoxShape.circle,
+              // A ring in the ink, so the dot shows on red team colors too.
+              border: Border.all(color: ink.withValues(alpha: 0.7), width: 1.5),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Live · ${live.name}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                  color: ink, fontSize: 14, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      );
+    }
+    final done = sessions.where((s) => s.isComplete).toList();
+    DateTime? last;
+    for (final s in done) {
+      final at = s.scheduledAt;
+      if (at != null && (last == null || at.isAfter(last))) last = at;
+    }
+    return Text(
+      done.isEmpty
+          ? 'No sessions yet'
+          : [
+              '${done.length} ${done.length == 1 ? 'session' : 'sessions'}',
+              if (last != null) 'last ${shortDate(last)}',
+            ].join(' · '),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(color: soft, fontSize: 14, fontWeight: FontWeight.w600),
     );
   }
 }
@@ -452,35 +547,14 @@ class _Notice extends StatelessWidget {
       padding: const EdgeInsets.only(top: 32),
       child: Column(
         children: [
-          Text(message, textAlign: TextAlign.center, style: const TextStyle(color: kMuted, height: 1.5)),
+          Text(message,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: kMuted, height: 1.5)),
           if (actionLabel != null) ...[
             const SizedBox(height: 16),
             OutlinedButton(onPressed: onAction, child: Text(actionLabel!)),
           ]
         ],
-      ),
-    );
-  }
-}
-
-class _SearchResultCard extends StatelessWidget {
-  const _SearchResultCard({required this.group, required this.onJoin});
-
-  final Group group;
-  final VoidCallback onJoin;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      color: const Color(0xFF111111),
-      margin: const EdgeInsets.only(bottom: 8),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        title: Text(group.id, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-        subtitle: Text(group.name, style: const TextStyle(color: kMuted)),
-        trailing: group.isMember
-            ? const Text('Member', style: TextStyle(color: kMuted))
-            : FilledButton(onPressed: onJoin, child: const Text('Join')),
       ),
     );
   }

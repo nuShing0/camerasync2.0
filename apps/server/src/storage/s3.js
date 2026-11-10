@@ -1,11 +1,10 @@
 // S3 storage driver: recordings are objects in one bucket, uploaded after
 // validation and streamed back through the server on playback.
 //
-// Streaming through the server (rather than redirecting players to a signed
-// S3 URL) keeps the existing cookie auth and the web app's
-// crossOrigin="use-credentials" video elements working unchanged, and needs no
-// CORS configuration on the bucket. Cloudflare Stream (SCRUM-64) is the
-// planned path for taking video bytes off the instance.
+// Streaming through the server keeps cookie auth on every request. With a
+// CDN set up, players instead get signed CloudFront links to the same
+// objects (see cdn.js and deploy/setup-cdn.sh), and this only serves files
+// to those still using /api/files/get.
 //
 // Configuration (environment):
 //   S3_BUCKET             required

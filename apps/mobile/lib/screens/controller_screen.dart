@@ -3,12 +3,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../socket/sync_socket.dart';
-import '../sync_beep.dart';
 import '../widgets/shutter_side_button.dart';
 
 /// A session with this phone's camera off: a host or admin starts and stops
-/// every other camera from here without recording on this phone. The start
-/// still plays the sync beep from this phone, like the host's shutter does.
+/// every other camera from here without recording on this phone.
 class ControllerScreen extends StatefulWidget {
   const ControllerScreen({
     super.key,
@@ -43,17 +41,8 @@ class _ControllerScreenState extends State<ControllerScreen> {
   bool _recording = false;
   bool _requesting = false;
 
-  /// This phone pressed Start, so it plays the sync beep for the take.
-  bool _beepOnNextStart = false;
-  SyncBeep? _beep;
-  Timer? _pendingBeep;
-
-  /// The stop is in; the cameras roll on until its time to record the end
-  /// beep, which this phone plays if it pressed Stop.
+  /// The stop is in; the cameras roll on until its time.
   Timer? _pendingStop;
-  bool _beepOnNextStop = false;
-  SyncBeep? _endBeep;
-  Timer? _pendingEndBeep;
 
   @override
   void initState() {
@@ -64,19 +53,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   void _scheduleStop(RecordingStopCommand command) {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final wasStarting = _pendingStart?.isActive ?? false;
     _pendingStart?.cancel();
-    if (wasStarting) _pendingBeep?.cancel();
-
-    final endBeepAt = command.localEndBeepAtEpochMs;
-    if (_beepOnNextStop && endBeepAt != null && _endBeep != null) {
-      _pendingEndBeep?.cancel();
-      _pendingEndBeep = Timer(
-        Duration(milliseconds: endBeepAt < now ? 0 : endBeepAt - now),
-        () => _endBeep?.play(),
-      );
-    }
-    _beepOnNextStop = false;
 
     final stopAt = command.localStopAtEpochMs;
     final wait = stopAt == null || stopAt < now ? 0 : stopAt - now;
@@ -89,17 +66,6 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
   void _scheduleStart(RecordingStartCommand command) {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final beepAt = command.localBeepAtEpochMs;
-    if (_beepOnNextStart && beepAt != null && _beep != null) {
-      _beepOnNextStart = false;
-      _pendingBeep?.cancel();
-      final wait = beepAt - now;
-      _pendingBeep = Timer(
-        Duration(milliseconds: wait < 0 ? 0 : wait),
-        () => _beep?.play(),
-      );
-    }
-
     final delay = command.localStartAtEpochMs - now;
     _pendingStart?.cancel();
     _pendingStart = Timer(Duration(milliseconds: delay < 0 ? 0 : delay), () {
@@ -112,23 +78,12 @@ class _ControllerScreenState extends State<ControllerScreen> {
     if (_requesting || (_pendingStop?.isActive ?? false)) return;
     final stopping = _recording || (_pendingStart?.isActive ?? false);
     setState(() => _requesting = true);
-    if (!stopping) {
-      _beepOnNextStart = true;
-      _beep ??= SyncBeep();
-      await _beep!.prepare().catchError((_) {});
-    } else {
-      _beepOnNextStop = true;
-      _endBeep ??= SyncBeep(tones: kEndBeepTonesHz);
-      await _endBeep!.prepare().catchError((_) {});
-    }
     final error = stopping
         ? await widget.socket.requestStop(widget.sessionId)
         : await widget.socket.requestStart(widget.sessionId);
     if (!mounted) return;
     setState(() => _requesting = false);
     if (error != null) {
-      _beepOnNextStart = false;
-      _beepOnNextStop = false;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error)));
     }
@@ -137,11 +92,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
   @override
   void dispose() {
     _pendingStart?.cancel();
-    _pendingBeep?.cancel();
-    _beep?.dispose();
     _pendingStop?.cancel();
-    _pendingEndBeep?.cancel();
-    _endBeep?.dispose();
     for (final sub in _subs) {
       sub.cancel();
     }
@@ -171,7 +122,10 @@ class _ControllerScreenState extends State<ControllerScreen> {
 
     return Scaffold(
       backgroundColor: Colors.black,
+      // Laid out like the camera's screen (same button sizes and spot), so
+      // switching between the two doesn't make anything jump.
       body: SafeArea(
+        bottom: false,
         child: Column(
           children: [
             widget.topBar,
@@ -183,7 +137,9 @@ class _ControllerScreenState extends State<ControllerScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Icon(
-                        active ? Icons.fiber_manual_record : Icons.videocam_off_outlined,
+                        active
+                            ? Icons.fiber_manual_record
+                            : Icons.videocam_off_outlined,
                         size: 44,
                         color: active ? Colors.redAccent : Colors.white54,
                       ),
@@ -202,16 +158,9 @@ class _ControllerScreenState extends State<ControllerScreen> {
                         "Control only: this phone isn't recording."
                         '${controlling > 1 ? ' $controlling people are controlling.' : ''}',
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70, height: 1.4),
+                        style:
+                            const TextStyle(color: Colors.white70, height: 1.4),
                       ),
-                      if (!active) ...[
-                        const SizedBox(height: 6),
-                        const Text(
-                          'Starting plays the sync beep from this phone, so keep it near the middle of the room.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: Colors.white54, fontSize: 12, height: 1.4),
-                        ),
-                      ],
                     ],
                   ),
                 ),
@@ -232,8 +181,8 @@ class _ControllerScreenState extends State<ControllerScreen> {
                   child: GestureDetector(
                     onTap: _startOrStop,
                     child: Container(
-                      width: 80,
-                      height: 80,
+                      width: 72,
+                      height: 72,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: Colors.white24,
@@ -242,12 +191,12 @@ class _ControllerScreenState extends State<ControllerScreen> {
                       child: Center(
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 180),
-                          width: active ? 30 : 62,
-                          height: active ? 30 : 62,
+                          width: active ? 28 : 56,
+                          height: active ? 28 : 56,
                           decoration: BoxDecoration(
                             color: Colors.redAccent,
                             borderRadius:
-                                BorderRadius.circular(active ? 6 : 31),
+                                BorderRadius.circular(active ? 6 : 28),
                           ),
                         ),
                       ),
@@ -263,12 +212,7 @@ class _ControllerScreenState extends State<ControllerScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            Text(
-              active ? 'Stop all cameras' : 'Start all cameras',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 40),
           ],
         ),
       ),

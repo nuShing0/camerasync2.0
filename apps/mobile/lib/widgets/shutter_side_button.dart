@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'frosted.dart';
+
 /// A round button beside the shutter, like a camera app's gallery and
 /// flip-camera buttons. Greyed out when [onPressed] is null (mid-take).
 class ShutterSideButton extends StatelessWidget {
@@ -24,18 +26,25 @@ class ShutterSideButton extends StatelessWidget {
     final enabled = onPressed != null;
     return Tooltip(
       message: tooltip,
-      child: Material(
-        color: Colors.black54,
-        shape: CircleBorder(
-          side: BorderSide(color: enabled ? Colors.white70 : Colors.white24, width: 1.5),
-        ),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onPressed,
-          child: SizedBox(
-            width: size,
-            height: size,
-            child: Icon(icon, color: enabled ? color : Colors.white38, semanticLabel: tooltip),
+      child: Frosted(
+        radius: size / 2,
+        tint: Colors.black38,
+        child: Material(
+          type: MaterialType.transparency,
+          shape: CircleBorder(
+            side: BorderSide(
+                color: enabled ? Colors.white70 : Colors.white24, width: 1.5),
+          ),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: onPressed,
+            child: SizedBox(
+              width: size,
+              height: size,
+              child: Icon(icon,
+                  color: enabled ? color : Colors.white38,
+                  semanticLabel: tooltip),
+            ),
           ),
         ),
       ),

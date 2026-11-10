@@ -58,8 +58,8 @@ void main() {
       } else if (req.uri.path == '/api/groups') {
         body = {
           'groups': [
-            {'id': 'cheer', 'name': 'UCF Cheer', 'isPublic': true},
-            {'id': 'dance', 'name': 'Dance Team', 'isPublic': true},
+            {'id': 'cheer', 'name': 'UCF Cheer'},
+            {'id': 'dance', 'name': 'Dance Team'},
           ],
         };
       } else {
@@ -82,7 +82,7 @@ void main() {
   // 400; clear it so the widget can reach the local server above.
   setUp(() => HttpOverrides.global = null);
 
-  testWidgets('lists completed sessions newest first with group names',
+  testWidgets('lists completed sessions newest first with group names, in a grid',
       (tester) async {
     await tester.runAsync(() async {
       await tester.pumpWidget(MaterialApp(home: RecordingsScreen(auth: auth())));
@@ -98,9 +98,14 @@ void main() {
     expect(find.textContaining('UCF Cheer'), findsOneWidget);
     expect(find.textContaining('2 recordings'), findsOneWidget);
 
+    // Two to a row, newest on the left.
     final stunt = tester.getTopLeft(find.text('Stunt practice'));
     final dance = tester.getTopLeft(find.text('Dance run-through'));
-    expect(stunt.dy, lessThan(dance.dy));
+    expect(stunt.dy, dance.dy);
+    expect(stunt.dx, lessThan(dance.dx));
+    // Under their month's heading; members get no ··· menu to delete.
+    expect(find.textContaining('SEPTEMBER'), findsOneWidget);
+    expect(find.text('···'), findsNothing);
   });
 
   testWidgets('filters to one group when opened from Groups', (tester) async {

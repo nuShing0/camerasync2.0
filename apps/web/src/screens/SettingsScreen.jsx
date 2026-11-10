@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import packageJson from "../../package.json";
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -89,6 +89,8 @@ function AccountSection() {
 }
 
 function PasswordRow() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ current: "", next: "", confirm: "" });
   const [saving, setSaving] = useState(false);
@@ -156,6 +158,13 @@ function PasswordRow() {
             <input type="password" autoComplete="new-password" required
               value={form.confirm} onChange={update("confirm")} />
           </label>
+          <button type="button" className="st-link st-reset-link"
+            disabled={saving}
+            onClick={() => navigate("/forgot-password", {
+              state: { resetEmail: user.email },
+            })}>
+            Forgot your current password?
+          </button>
           {error && <p role="alert" className="st-error">{error}</p>}
           <div className="st-actions">
             <button type="button" className="st-button" disabled={saving}
@@ -327,6 +336,7 @@ const css = `
   .st-card select { width: 100%; }
   .st-password-form { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 6px; }
   .st-password-form label { display: flex; flex-direction: column; gap: 6px; color: #ddd; font-size: 0.85rem; font-weight: 600; }
+  .st-password-form .st-reset-link { margin: 0; align-self: flex-start; }
   .st-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
   .st-button {
     padding: 8px 14px; border: 1px solid #3a3a3a; border-radius: 7px;

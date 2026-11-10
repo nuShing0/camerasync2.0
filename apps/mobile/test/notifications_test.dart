@@ -64,4 +64,18 @@ void main() {
     await tester.tap(find.byType(NotificationTile));
     expect(tapped, isTrue);
   });
+
+  testWidgets('a request to join says who asked, for which group',
+      (tester) async {
+    final request = parse({'type': 'request'});
+    expect(request.sessionId, isNull);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: NotificationTile(notification: request, onTap: () {}),
+      ),
+    ));
+
+    expect(find.textContaining('Coach Taylor asked to join UCF Cheer',
+        findRichText: true), findsOneWidget);
+  });
 }

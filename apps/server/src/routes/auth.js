@@ -616,7 +616,7 @@ authRouter.delete("/me", requireAuth, async (req, res, next) => {
 
     await client.query("BEGIN");
     const files = await client.query(
-      `SELECT file_id, preview_file_id, thumbnail_file_id FROM recording_session_videos
+      `SELECT file_id, preview_file_id, thumbnail_file_id, scrub FROM recording_session_videos
         WHERE user_id = $1 AND file_id IS NOT NULL`,
       [req.user.id]
     );

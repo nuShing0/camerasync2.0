@@ -5,7 +5,7 @@ import {
   CAMERA_START_MS,
   MAX_START_DELAY_MS,
   MIN_START_DELAY_MS,
-  END_BEEP_TAIL_MS,
+  MIN_STOP_DELAY_MS,
   startDelayMs,
   stopSchedule,
   trackRoundTrips,
@@ -75,21 +75,22 @@ describe("stopSchedule", () => {
     });
   });
 
-  it("plays the end beep once the slowest device has the stop, then stops", () => {
+  it("stops once the slowest device has the stop, with no tail after it", () => {
     const now = START + 30_000;
     const { endBeepAtEpochMs, stopAtEpochMs } = stopSchedule([40, 900], START, now);
-    expect(endBeepAtEpochMs).toBe(now + 1200);
-    expect(stopAtEpochMs).toBe(endBeepAtEpochMs + END_BEEP_TAIL_MS);
+    expect(stopAtEpochMs).toBe(now + 1200);
+    // Still sent for older apps, at the stop itself.
+    expect(endBeepAtEpochMs).toBe(stopAtEpochMs);
   });
 
-  it("waits at least a second, and at most the start delay's cap", () => {
+  it("waits at least the minimum, and at most the start delay's cap", () => {
     const now = START + 30_000;
-    expect(stopSchedule([], START, now).endBeepAtEpochMs).toBe(now + 1000);
-    expect(stopSchedule([60_000], START, now).endBeepAtEpochMs).toBe(now + MAX_START_DELAY_MS);
+    expect(stopSchedule([], START, now).stopAtEpochMs).toBe(now + MIN_STOP_DELAY_MS);
+    expect(stopSchedule([60_000], START, now).stopAtEpochMs).toBe(now + MAX_START_DELAY_MS);
   });
 
-  it("keeps the end beep clear of the start beep in a very short take", () => {
-    const { endBeepAtEpochMs } = stopSchedule([], START, START + 100);
-    expect(endBeepAtEpochMs).toBeGreaterThanOrEqual(START + 1500 + 600);
+  it("doesn't stretch a very short take", () => {
+    const { stopAtEpochMs } = stopSchedule([], START, START + 100);
+    expect(stopAtEpochMs).toBe(START + 100 + MIN_STOP_DELAY_MS);
   });
 });

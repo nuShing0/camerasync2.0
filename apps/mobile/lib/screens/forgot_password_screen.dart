@@ -13,9 +13,16 @@ enum _Step { email, code, password }
 /// choose a new password. Pops with `true` once the reset succeeds so the
 /// sign-in screen can show a confirmation.
 class ForgotPasswordScreen extends StatefulWidget {
-  const ForgotPasswordScreen({super.key, required this.auth});
+  const ForgotPasswordScreen({
+    super.key,
+    required this.auth,
+    this.initialEmail,
+    this.onResetComplete,
+  });
 
   final AuthService auth;
+  final String? initialEmail;
+  final Future<void> Function()? onResetComplete;
 
   @override
   State<ForgotPasswordScreen> createState() => _ForgotPasswordScreenState();
@@ -27,7 +34,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
   String? _error;
   String? _notice;
 
-  final _email = TextEditingController();
+  late final _email = TextEditingController(text: widget.initialEmail ?? '');
   final _code = TextEditingController();
   final _password = TextEditingController();
   final _confirm = TextEditingController();
@@ -128,6 +135,8 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         token: _resetToken!,
         password: _password.text,
       );
+      if (!mounted) return;
+      await widget.onResetComplete?.call();
       if (!mounted) return;
       Navigator.of(context).pop(true);
     });

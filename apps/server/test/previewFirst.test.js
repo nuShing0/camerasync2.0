@@ -4,7 +4,7 @@
 import "dotenv/config";
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -23,12 +23,17 @@ vi.mock("../src/recordings/previews.js", () => ({
   queuePreview: vi.fn(),
   startPreviewBackfill: vi.fn(),
 }));
+vi.mock("../src/recordings/scrubFrames.js", () => ({
+  queueScrubFrames: vi.fn(),
+  startScrubBackfill: vi.fn(),
+}));
 
 const { authRouter } = await import("../src/routes/auth.js");
 const { groupRouter } = await import("../src/routes/groups.js");
 const { recordingsRouter } = await import("../src/routes/recordings.js");
 const { fileRouter } = await import("../src/routes/file.js");
 const { pool } = await import("../src/db/pool.js");
+const { sweepRetiredFiles } = await import("../src/recordings/retiredFiles.js");
 
 const app = express();
 app.use(express.json());
@@ -84,6 +89,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (dir) rmSync(dir, { recursive: true, force: true });
+  await pool.query("DELETE FROM retired_files WHERE session_id = $1", [sessionId]);
   await pool.query("DELETE FROM groups WHERE group_id = $1", [GROUP_ID]);
   await pool.query(
     "DELETE FROM sessions WHERE user_id IN (SELECT user_id FROM users WHERE email = $1)",
@@ -125,6 +131,104 @@ describe("preview first", () => {
     expect(later.url).toBe(`/api/files/get/${fullRes.body.file.id}`);
     // The phone's preview gives way to the server's (made in the background).
     expect(later.previewUrl).toBeNull();
+
+    // Anyone already watching it finishes the take on it...
+    const fetchPreview = () => request(app).get(early.url).set("Cookie", cookie);
+    expect((await fetchPreview()).status).toBe(200);
+    // ...and an hour later it's deleted.
+    await pool.query(
+      `UPDATE retired_files SET retired_at = NOW() - INTERVAL '2 hours' WHERE session_id = $1`,
+      [sessionId]
+    );
+    expect(await sweepRetiredFiles()).toBeGreaterThanOrEqual(1);
+    expect((await fetchPreview()).status).toBe(404);
+  });
+
+  it("shows the uploading device's progress until the full video is in", async () => {
+    if (!hasFfmpeg) return;
+    const startedAt = Date.now() - 3_000;
+    const report = (stage, fraction) => request(app)
+      .post(`/api/recordings/sessions/${sessionId}/upload-progress`)
+      .set("Cookie", cookie)
+      .send({ startedAt, stage, fraction });
+    await request(app).post(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie).send({ startedAt });
+
+    expect((await report("full", 0.4)).status).toBe(204);
+    expect((await angle(startedAt)).upload).toEqual({ stage: "full", fraction: 0.4, stalled: false });
+
+    expect((await upload(full, startedAt)).status).toBe(201);
+    expect((await angle(startedAt)).upload).toBeNull();
+    expect((await report("bogus", 0.4)).status).toBe(400);
+  });
+
+  it("takes a video in pieces, carrying on from what arrived", async () => {
+    if (!hasFfmpeg) return;
+    const startedAt = Date.now() - 4_000;
+    const bytes = readFileSync(full);
+    const half = Math.floor(bytes.length / 2);
+    const base = `/api/files/uploads`;
+
+    const start = await request(app)
+      .post(`${base}?sessionId=${sessionId}&startedAt=${startedAt}&actualStartedAt=${startedAt + 80}` +
+        `&startClock=frame&size=${bytes.length}&name=full.mp4`)
+      .set("Cookie", cookie);
+    expect(start.status).toBe(201);
+    const { uploadId } = start.body;
+    const put = (offset, chunk) => request(app)
+      .put(`${base}/${uploadId}?offset=${offset}`)
+      .set("Cookie", cookie)
+      .set("Content-Type", "application/octet-stream")
+      .send(chunk);
+
+    expect((await put(0, bytes.subarray(0, half))).body.offset).toBe(half);
+    // Asked again after a dropped connection: carries on from there.
+    expect((await request(app).get(`${base}/${uploadId}`).set("Cookie", cookie)).body)
+      .toEqual({ offset: half, size: bytes.length });
+    // Not all here yet.
+    expect((await request(app).post(`${base}/${uploadId}/complete`).set("Cookie", cookie)).status)
+      .toBe(409);
+    // A piece sent for the wrong place is refused, with the right place.
+    const wrong = await put(0, bytes.subarray(0, 10));
+    expect(wrong.status).toBe(409);
+    expect(wrong.body.offset).toBe(half);
+    expect((await put(half, bytes.subarray(half))).body.offset).toBe(bytes.length);
+
+    const done = await request(app).post(`${base}/${uploadId}/complete`).set("Cookie", cookie);
+    expect(done.status).toBe(201);
+    const video = await angle(startedAt);
+    expect(video.url).toBe(`/api/files/get/${done.body.file.id}`);
+    expect(video).toMatchObject({ startOffsetMs: 80, previewOnly: false });
+    // Gone once finished.
+    expect((await request(app).get(`${base}/${uploadId}`).set("Cookie", cookie)).status).toBe(404);
+  });
+
+  it("deletes one recording, and turns away a late upload of it", async () => {
+    if (!hasFfmpeg) return;
+    const keep = Date.now() - 9_000;
+    const gone = Date.now() - 8_000;
+    expect((await upload(full, keep)).status).toBe(201);
+    expect((await upload(full, gone)).status).toBe(201);
+    const listed = async () => (await request(app)
+      .get(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie)).body.recordings.map((r) => r.startedAt);
+
+    const res = await request(app)
+      .delete(`/api/recordings/sessions/${sessionId}/recordings/${gone}`)
+      .set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(await listed()).toContain(keep);
+    expect(await listed()).not.toContain(gone);
+
+    // A phone still sending it can't bring it back.
+    expect((await upload(full, gone)).status).toBe(410);
+    expect((await request(app).post(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie).send({ startedAt: gone })).status).toBe(410);
+    expect(await listed()).not.toContain(gone);
+    // Twice is not found.
+    expect((await request(app)
+      .delete(`/api/recordings/sessions/${sessionId}/recordings/${gone + 1}`)
+      .set("Cookie", cookie)).status).toBe(404);
   });
 
   it("ignores a preview that arrives after the full video", async () => {

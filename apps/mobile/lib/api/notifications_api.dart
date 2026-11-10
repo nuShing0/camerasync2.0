@@ -2,7 +2,8 @@ import 'api_client.dart';
 
 /// Something that happened in one of the user's groups, as shaped by the
 /// server's `publicNotification` (apps/server/src/routes/notifications.js):
-/// a comment on a recording, someone joining, or a practice starting.
+/// a comment on a recording, someone joining or asking to join, or a
+/// session starting.
 class AppNotification {
   const AppNotification({
     required this.id,
@@ -21,7 +22,8 @@ class AppNotification {
 
   final String id;
 
-  /// 'comment', 'join' or 'session'.
+  /// 'comment', 'join', 'request' (someone asked to join; only the group's
+  /// admins get these) or 'session'.
   final String type;
   final DateTime at;
 

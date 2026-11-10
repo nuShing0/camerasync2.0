@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
+import { useAuth } from "../auth/AuthContext.jsx";
 import {
   requestPasswordReset,
   resetPassword,
@@ -16,10 +17,12 @@ const STEPS = { email: "email", code: "code", password: "password", done: "done"
 const CODE_LENGTH = 6;
 
 export function ForgotPasswordScreen() {
+  const location = useLocation();
   const navigate = useNavigate();
+  const { isAuthenticated, logout } = useAuth();
 
   const [step, setStep] = useState(STEPS.email);
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => location.state?.resetEmail ?? "");
   const [code, setCode] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -93,6 +96,7 @@ export function ForgotPasswordScreen() {
     }
     run(async () => {
       await resetPassword({ token: tokenRef.current, password });
+      if (isAuthenticated) await logout();
       setStep(STEPS.done);
     });
   };
@@ -143,9 +147,9 @@ export function ForgotPasswordScreen() {
             <button
               type="button"
               className="fp-link"
-              onClick={() => navigate("/login")}
+              onClick={() => navigate(isAuthenticated ? "/settings" : "/login")}
             >
-              Back to Sign In
+              {isAuthenticated ? "Back to Settings" : "Back to Sign In"}
             </button>
           </form>
         )}

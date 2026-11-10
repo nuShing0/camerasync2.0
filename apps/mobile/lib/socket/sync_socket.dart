@@ -17,6 +17,7 @@ class SessionMember {
     required this.email,
     this.name,
     this.camera = true,
+    this.roundTripMs,
   });
 
   final int id;
@@ -26,14 +27,18 @@ class SessionMember {
   /// False for a host or admin running the session without recording.
   final bool camera;
 
-  String get displayName =>
-      (name != null && name!.isNotEmpty) ? name! : email;
+  /// How long their connection takes to answer the server, timed by the
+  /// server every few seconds (their slowest device); null until it has.
+  final int? roundTripMs;
+
+  String get displayName => (name != null && name!.isNotEmpty) ? name! : email;
 
   factory SessionMember.fromJson(Map json) => SessionMember(
         id: (json['id'] as num).toInt(),
         email: (json['email'] ?? '').toString(),
         name: json['name'] as String?,
         camera: json['camera'] != false,
+        roundTripMs: (json['roundTripMs'] as num?)?.toInt(),
       );
 }
 
@@ -369,7 +374,9 @@ class SyncSocket {
     var id = prefs.getString('deviceId');
     if (id == null) {
       final random = Random.secure();
-      id = List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+      id = List.generate(
+              16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'))
+          .join();
       await prefs.setString('deviceId', id);
     }
     return id;
@@ -426,8 +433,7 @@ class SyncSocket {
         final session = reply['session'];
         completer.complete(JoinResult(
           ok: true,
-          sessionName:
-              session is Map ? session['name']?.toString() : null,
+          sessionName: session is Map ? session['name']?.toString() : null,
           canControl: session is Map && session['canControl'] == true,
           createdBy:
               session is Map ? (session['createdBy'] as num?)?.toInt() : null,

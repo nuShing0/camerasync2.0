@@ -34,7 +34,13 @@ describe("roomMembersFrom", () => {
 
   it("lists someone once, as recording if any of their devices is", () => {
     const members = roomMembersFrom([socket(1, false), socket(1, true), { data: {} }]);
-    expect(members).toEqual([{ id: 1, name: "User 1", camera: true }]);
+    expect(members).toEqual([{ id: 1, name: "User 1", camera: true, roundTripMs: null }]);
+  });
+
+  it("gives each person their slowest device's round trip", () => {
+    const timed = (id, roundTripMs) => ({ data: { user: { id }, roundTripMs } });
+    const members = roomMembersFrom([timed(1, 80.4), timed(1, 650), timed(2, 120), timed(3, undefined)]);
+    expect(members.map((m) => [m.id, m.roundTripMs])).toEqual([[1, 650], [2, 120], [3, null]]);
   });
 });
 

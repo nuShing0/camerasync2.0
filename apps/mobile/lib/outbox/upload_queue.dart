@@ -23,6 +23,8 @@ class QueuedTake {
     this.attempts = 0,
     this.preview = PreviewState.none,
     this.previewPath,
+    this.uploadId,
+    this.previewUploadId,
   });
 
   final String id;
@@ -44,6 +46,11 @@ class QueuedTake {
   PreviewState preview;
   String? previewPath;
 
+  /// The server's resumable upload of the video, and of its preview, once
+  /// one has started: a later try carries on from what reached the server.
+  String? uploadId;
+  String? previewUploadId;
+
   /// When the next try may start, after a failed one.
   DateTime? retryAt;
   String? lastError;
@@ -59,6 +66,8 @@ class QueuedTake {
         'attempts': attempts,
         'preview': preview.name,
         'previewPath': previewPath,
+        'uploadId': uploadId,
+        'previewUploadId': previewUploadId,
       };
 
   static QueuedTake fromJson(Map<String, dynamic> json) => QueuedTake(
@@ -72,6 +81,8 @@ class QueuedTake {
         attempts: (json['attempts'] as num?)?.toInt() ?? 0,
         preview: PreviewState.values.asNameMap()[json['preview']] ??
             PreviewState.none,
+        uploadId: json['uploadId'] as String?,
+        previewUploadId: json['previewUploadId'] as String?,
         previewPath: json['previewPath'] as String?,
       );
 }
@@ -110,7 +121,9 @@ enum UploadEvent { uploaded, unrecorded, rejected }
 /// wait (5 s, 15 s, 30 s, 1 min, 2 min, then every 5 min) until it gets
 /// through. No upload starts while a take is starting or running ([pause]),
 /// so the start and stop messages aren't stuck behind video on a slow
-/// network; one already sending is let finish.
+/// network; one already sending is stopped, and carries on from what
+/// reached the server once the take is over (uploads go in resumable
+/// pieces, see [RecordingsApi.uploadSessionVideo]).
 class UploadQueue extends ChangeNotifier {
   UploadQueue(this._api, {PreviewMaker? makePreview, Directory? dir})
       : _makePreview = makePreview ?? makeVideoPreview,
@@ -133,6 +146,12 @@ class UploadQueue extends ChangeNotifier {
 
   /// The take being sent right now, if any.
   QueuedTake? sending;
+
+  /// What of [sending] is going up ('preview' or 'full'), and how much of it
+  /// has gone, 0 to 1. Null while a preview is being made, and the fraction
+  /// until the first bytes go.
+  String? sendingStage;
+  double? sendingFraction;
 
   /// The most recent outcome, and when, for a short message on the camera.
   UploadEvent? lastEvent;
@@ -173,7 +192,8 @@ class UploadQueue extends ChangeNotifier {
       if (await file.exists()) {
         final list = jsonDecode(await file.readAsString()) as List;
         for (final json in list) {
-          final item = QueuedTake.fromJson(Map<String, dynamic>.from(json as Map));
+          final item =
+              QueuedTake.fromJson(Map<String, dynamic>.from(json as Map));
           if (!await File(item.path).exists()) continue;
           final previewPath = item.previewPath;
           if (item.preview == PreviewState.toSend &&
@@ -273,7 +293,8 @@ class UploadQueue extends ChangeNotifier {
       while (!paused) {
         final now = DateTime.now();
         final next = _items
-            .where((item) => item.retryAt == null || !item.retryAt!.isAfter(now))
+            .where(
+                (item) => item.retryAt == null || !item.retryAt!.isAfter(now))
             .firstOrNull;
         if (next == null) break;
         await _step(next);
@@ -281,6 +302,8 @@ class UploadQueue extends ChangeNotifier {
     } finally {
       _running = false;
       sending = null;
+      sendingStage = null;
+      sendingFraction = null;
       notifyListeners();
       _scheduleWake();
     }
@@ -289,7 +312,8 @@ class UploadQueue extends ChangeNotifier {
   /// The next thing to do for [item]: a preview to make or send comes
   /// first, for any waiting take, before a full video.
   Future<void> _step(QueuedTake item) async {
-    final previews = _items.where((i) => i.preview != PreviewState.none &&
+    final previews = _items.where((i) =>
+        i.preview != PreviewState.none &&
         (i.retryAt == null || !i.retryAt!.isAfter(DateTime.now())));
     final take = previews.firstOrNull ?? item;
     switch (take.preview) {
@@ -304,6 +328,8 @@ class UploadQueue extends ChangeNotifier {
 
   Future<void> _makePreviewFor(QueuedTake item) async {
     sending = item;
+    sendingStage = null;
+    sendingFraction = null;
     notifyListeners();
     _makingPreview = true;
     String? made;
@@ -316,10 +342,13 @@ class UploadQueue extends ChangeNotifier {
     }
     // Stopped for a take: make it again afterwards.
     if (paused) {
-      if (made != null) await File(made).delete().catchError((_) => File(made!));
+      if (made != null) {
+        await File(made).delete().catchError((_) => File(made!));
+      }
       return;
     }
-    final size = made == null ? 0 : await File(made).length().catchError((_) => 0);
+    final size =
+        made == null ? 0 : await File(made).length().catchError((_) => 0);
     if (made == null || size < minVideoBytes) {
       item.preview = PreviewState.none;
     } else {
@@ -336,12 +365,18 @@ class UploadQueue extends ChangeNotifier {
     await _save();
   }
 
+  /// The upload in progress was stopped for a [pause], not by a failure.
+  bool _stoppedForPause = false;
+
   Future<void> _send(QueuedTake item, {bool preview = false}) async {
     sending = item;
+    sendingStage = preview ? 'preview' : 'full';
+    sendingFraction = null;
     notifyListeners();
     try {
       await _api.saveRecordingDetails(item.sessionId, item.startedAtMs,
-          actualStartedAtMs: item.actualStartedAtMs, startClock: item.startClock);
+          actualStartedAtMs: item.actualStartedAtMs,
+          startClock: item.startClock);
       await _api.uploadSessionVideo(
         item.sessionId,
         item.startedAtMs,
@@ -351,6 +386,24 @@ class UploadQueue extends ChangeNotifier {
         startClock: item.startClock,
         preview: preview,
         timeout: const Duration(minutes: 30),
+        resumeId: preview ? item.previewUploadId : item.uploadId,
+        onStarted: (uploadId) {
+          if (preview) {
+            item.previewUploadId = uploadId;
+          } else {
+            item.uploadId = uploadId;
+          }
+          unawaited(_save());
+        },
+        onProgress: (sent, total) {
+          // Throwing here ends the file's stream, which ends the upload.
+          if (paused) {
+            _stoppedForPause = true;
+            throw StateError('Upload paused for a take');
+          }
+          _showProgress(sent, total);
+          _reportProgress(item, preview ? 'preview' : 'full', sent, total);
+        },
       );
       item.attempts = 0;
       if (preview) {
@@ -360,6 +413,7 @@ class UploadQueue extends ChangeNotifier {
         _event(UploadEvent.uploaded);
       }
     } on ApiException catch (e) {
+      if (_wasPaused()) return;
       // The server looked at it and said no (not a video, session gone):
       // trying again won't change that. Anything else (no connection, the
       // server busy, signed out) is worth another go.
@@ -378,16 +432,57 @@ class UploadQueue extends ChangeNotifier {
         _failed(item, e.message);
       }
     } catch (e) {
+      if (_wasPaused()) return;
       _failed(item, '$e');
     }
+  }
+
+  /// Whether the upload just ended was stopped for a [pause]. It then waits
+  /// in the queue as it was, with no failed try counted.
+  bool _wasPaused() {
+    if (!_stoppedForPause) return false;
+    _stoppedForPause = false;
+    return true;
+  }
+
+  /// How often an upload's progress is sent to the server, for the bars
+  /// viewers see: often enough to look alive, rarely enough not to compete
+  /// with the upload on a bad connection.
+  static const _progressEvery = Duration(seconds: 3);
+  DateTime? _progressSentAt;
+
+  /// For the camera's upload pill: redrawn only when the whole percent moves.
+  void _showProgress(int sent, int total) {
+    if (total <= 0) return;
+    final fraction = (sent / total).clamp(0.0, 1.0);
+    final before = sendingFraction;
+    sendingFraction = fraction;
+    if (before == null || (before * 100).floor() != (fraction * 100).floor()) {
+      notifyListeners();
+    }
+  }
+
+  void _reportProgress(QueuedTake item, String stage, int sent, int total) {
+    final now = DateTime.now();
+    final last = _progressSentAt;
+    if (total <= 0 || (last != null && now.difference(last) < _progressEvery)) {
+      return;
+    }
+    _progressSentAt = now;
+    unawaited(_api
+        .reportUploadProgress(
+            item.sessionId, item.startedAtMs, stage, sent / total)
+        .catchError((_) {}));
   }
 
   void _failed(QueuedTake item, String error) {
     item.attempts += 1;
     item.lastError = error;
-    final wait = _retryDelays[math.min(item.attempts - 1, _retryDelays.length - 1)];
+    final wait =
+        _retryDelays[math.min(item.attempts - 1, _retryDelays.length - 1)];
     item.retryAt = DateTime.now().add(Duration(seconds: wait));
-    debugPrint('Upload failed (try ${item.attempts}), again in ${wait}s: $error');
+    debugPrint(
+        'Upload failed (try ${item.attempts}), again in ${wait}s: $error');
     unawaited(_save());
     notifyListeners();
   }
@@ -403,6 +498,7 @@ class UploadQueue extends ChangeNotifier {
     final path = item.previewPath;
     item.preview = PreviewState.none;
     item.previewPath = null;
+    item.previewUploadId = null;
     if (path != null) await File(path).delete().catchError((_) => File(path));
     await _save();
   }
@@ -433,6 +529,7 @@ class UploadQueue extends ChangeNotifier {
   Future<void> _save() async {
     final dir = await _storage();
     final file = File('${dir.path}/queue.json');
-    await file.writeAsString(jsonEncode([for (final item in _items) item.toJson()]));
+    await file
+        .writeAsString(jsonEncode([for (final item in _items) item.toJson()]));
   }
 }

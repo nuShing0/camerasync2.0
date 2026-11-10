@@ -70,15 +70,41 @@ export function otherDevicesOf(sockets, socket) {
   return { elsewhere, staleHere };
 }
 
+/// roundTripMs is how long their connection takes to answer (the slowest of
+/// their devices; null until it's been timed), so everyone can see whose
+/// connection is weak.
 export function roomMembersFrom(sockets) {
   const members = new Map();
   for (const socket of sockets) {
     const user = socket.data.user;
     if (!user) continue;
-    const camera = socket.data.camera !== false || members.get(user.id)?.camera === true;
-    members.set(user.id, { ...user, camera });
+    const earlier = members.get(user.id);
+    const camera = socket.data.camera !== false || earlier?.camera === true;
+    const timed = [earlier?.roundTripMs, socket.data.roundTripMs]
+      .filter((ms) => Number.isFinite(ms));
+    const roundTripMs = timed.length > 0 ? Math.round(Math.max(...timed)) : null;
+    members.set(user.id, { ...user, camera, roundTripMs });
   }
   return Array.from(members.values());
+}
+
+// Every heartbeat, each live session gets its device list again, so the
+// connection levels in it stay current.
+const MEMBERS_EVERY_MS = 10_000;
+
+function startMemberUpdates(server) {
+  const timer = setInterval(async () => {
+    for (const room of server.of("/").adapter.rooms.keys()) {
+      if (!room.startsWith("recording:")) continue;
+      const sessionId = room.slice("recording:".length);
+      try {
+        server.to(room).emit(EVENTS.SESSION_MEMBERS, await getRoomMembers(sessionId));
+      } catch (err) {
+        console.error("Could not update session members:", err);
+      }
+    }
+  }, MEMBERS_EVERY_MS);
+  timer.unref();
 }
 
 // Called whenever a device joins or leaves, so it also notes the session's
@@ -145,6 +171,7 @@ export async function initSocket(httpServer) {
     pingInterval: 10000,
   });
   io.adapter(createAdapter(pool));
+  startMemberUpdates(io);
 
   // socket rooms use the same login cookie as the api
   io.use(async (socket, next) => {
@@ -410,7 +437,7 @@ export async function stopSessionRecording(sessionId) {
   const stoppedRecording = {
     ...recording,
     stopAtEpochMs,
-    // The device that asked for the stop plays the end beep at this time.
+    // Older app versions play an end beep at this time (now the stop itself).
     endBeepAtEpochMs,
   };
   stoppingUntil.set(sessionId, stopAtEpochMs);

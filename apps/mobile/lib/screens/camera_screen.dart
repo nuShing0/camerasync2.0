@@ -13,7 +13,6 @@ import '../outbox/upload_status.dart';
 import '../recording_quality.dart';
 import '../notifications/take_alerts.dart';
 import '../socket/sync_socket.dart';
-import '../sync_beep.dart';
 import '../widgets/shutter_side_button.dart';
 
 /// Camera view. Works in two modes:
@@ -69,20 +68,18 @@ class CameraScreen extends StatefulWidget {
   State<CameraScreen> createState() => _CameraScreenState();
 }
 
-
 /// How long before a take's shared start the camera is told to record.
 /// Phones only really start a beat after they're asked (0.9 s on an Android
 /// in testing, 0.1-0.2 s on iPhones), so asking early has them rolling by
 /// the start. The extra second at the front costs nothing: playback lines
-/// the angles up by the sync beep.
+/// the angles up by each camera's first frame.
 const kCameraLeadMs = 1000;
 
 class _CameraScreenState extends State<CameraScreen> {
   final List<StreamSubscription> _subs = [];
   Timer? _pendingStart;
 
-  /// The stop is in, and the cameras keep rolling until its time so they
-  /// all record the end beep.
+  /// The stop is in, and the cameras keep rolling until its time.
   Timer? _pendingStop;
 
   /// The take this phone left the app during. It carries on without this
@@ -229,28 +226,16 @@ class _CameraScreenState extends State<CameraScreen> {
 
     _pendingStart?.cancel();
 
-    final beepAt = command.localBeepAtEpochMs;
-    if (_beepOnNextStart && beepAt != null && _beep != null) {
-      _beepOnNextStart = false;
-      _pendingBeep?.cancel();
-      final wait = beepAt - DateTime.now().millisecondsSinceEpoch;
-      _pendingBeep = Timer(
-        Duration(milliseconds: wait < 0 ? 0 : wait),
-        () => _beep?.play(),
-      );
-    }
-
     _pendingStart = Timer(
       Duration(milliseconds: delay < 0 ? 0 : delay),
       _startRecording,
-    );  //Timer
+    ); //Timer
   }
 
   /// The take's shared start on this device's clock.
   int? _plannedLocalStartAtEpochMs;
 
-  /// Keeps recording until the stop's time, playing the end beep first if
-  /// this phone pressed Stop. A take stopped before its shared start is
+  /// Keeps recording until the stop's time. A take stopped before its shared start is
   /// cancelled: anything already recorded for it (the camera starts early)
   /// is thrown away.
   void _scheduleStop(RecordingStopCommand command) {
@@ -262,17 +247,6 @@ class _CameraScreenState extends State<CameraScreen> {
         stopAt != null &&
         startAt != null &&
         stopAt < startAt;
-
-    if (cancelled) _pendingBeep?.cancel();
-    final endBeepAt = command.localEndBeepAtEpochMs;
-    if (_beepOnNextStop && endBeepAt != null && _endBeep != null) {
-      _pendingEndBeep?.cancel();
-      _pendingEndBeep = Timer(
-        Duration(milliseconds: math.max(0, endBeepAt - now)),
-        () => _endBeep?.play(),
-      );
-    }
-    _beepOnNextStop = false;
 
     if (!(_cameraController?.value.isRecordingVideo ?? false)) {
       // Stopped before it started: nothing to save, just unlock.
@@ -321,16 +295,15 @@ class _CameraScreenState extends State<CameraScreen> {
     }
     if (!mounted || _droppedTakeStartAt == null) return;
     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text(
-          'You left the app, so your recording stopped. What was recorded '
-          'is saved, and you\'ll join the next take.'),
+      content:
+          Text('You left the app, so your recording stopped. What was recorded '
+              'is saved, and you\'ll join the next take.'),
       duration: Duration(seconds: 6),
     ));
   }
 
   Future<void> _startRecording() async {
-    if (_cameraController == null ||
-        !_cameraController!.value.isInitialized) {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
       debugPrint('Camera not ready');
       return;
     }
@@ -434,17 +407,13 @@ class _CameraScreenState extends State<CameraScreen> {
     KeepAwake.release();
     _lifecycle.dispose();
     _pendingStop?.cancel();
-    _pendingEndBeep?.cancel();
-    _endBeep?.dispose();
     if (_orientationLocked) SystemChrome.setPreferredOrientations(const []);
     _pendingStart?.cancel();
-    _pendingBeep?.cancel();
-    _beep?.dispose();
 
     for (final sub in _subs) {
       sub.cancel();
     }
-    
+
     _cameraController?.dispose();
     super.dispose();
   }
@@ -463,6 +432,35 @@ class _CameraScreenState extends State<CameraScreen> {
           fit: StackFit.expand,
           children: [
             _body(),
+            // Tinted from the top down, fading out below the bar, so its
+            // text reads over any picture without shadows of its own. A
+            // fixed height: the devices pill opening over it doesn't stretch
+            // it.
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              height: MediaQuery.paddingOf(context).top + _topBarSpace + 56,
+              child: const IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      // Eased out over a long way, so there's no edge to see.
+                      colors: [
+                        Color(0x73000000),
+                        Color(0x47000000),
+                        Color(0x1F000000),
+                        Color(0x08000000),
+                        Color(0x00000000),
+                      ],
+                      stops: [0, 0.35, 0.65, 0.85, 1],
+                    ),
+                  ),
+                ),
+              ),
+            ),
             Positioned(
               top: 0,
               left: 0,
@@ -505,8 +503,9 @@ class _CameraScreenState extends State<CameraScreen> {
       children: [
         _preview(),
 
-        // Recording indicator, kept clear of the status bar and top bar.
-        if (_recording)
+        // Recording indicator, kept clear of the status bar. In a session
+        // the top bar's pill says it, so only the rotation lock shows here.
+        if (_recording && (widget.topBar == null || _orientationLocked))
           Positioned(
             top: 60 + _topBarSpace,
             left: 0,
@@ -515,18 +514,19 @@ class _CameraScreenState extends State<CameraScreen> {
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    _recordingNumber == null
-                        ? '● REC'
-                        : '● REC  ·  Recording ${_recordingNumber!.toString().padLeft(3, '0')}',
-                    style: const TextStyle(
-                      color: Colors.redAccent,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1,
+                  if (widget.topBar == null)
+                    Text(
+                      _recordingNumber == null
+                          ? '● REC'
+                          : '● REC  ·  Recording ${_recordingNumber!.toString().padLeft(3, '0')}',
+                      style: const TextStyle(
+                        color: Colors.redAccent,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1,
+                      ),
                     ),
-                  ),
                   if (_orientationLocked) ...[
-                    const SizedBox(width: 8),
+                    if (widget.topBar == null) const SizedBox(width: 8),
                     const Icon(Icons.screen_lock_rotation,
                         size: 16,
                         color: Colors.white70,
@@ -537,44 +537,62 @@ class _CameraScreenState extends State<CameraScreen> {
             ),
           ),
 
-        // What the phone's outbox is doing (sending, waiting, done).
-        if (_uploadsEnabled)
-          Positioned(
-            top: 96 + _topBarSpace,
-            left: 16,
-            right: 16,
-            child: Center(
-              child: UploadStatusBanner(
-                queue: UploadQueue.instance ??=
-                    UploadQueue(widget.recordings!),
-              ),
-            ),
-          ),
-
         // Shutter: bottom-centre in portrait, right-hand side and vertically
         // centred in landscape — where your thumb sits holding the phone
-        // sideways, and clear of the floating dock either way.
-        if (MediaQuery.of(context).orientation == Orientation.landscape)
+        // sideways, and clear of the floating dock either way. What the
+        // phone's outbox is doing (sending, waiting, done) sits just above
+        // it in portrait, and along the bottom in landscape.
+        if (MediaQuery.of(context).orientation == Orientation.landscape) ...[
           Positioned(
             top: 0,
             bottom: 0,
             right: 32,
             child: Center(child: _shutter()),
-          )
-        else
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: widget.embedded ? 118 : 40,
-            child: Center(child: _shutter()),
           ),
+          if (_uploadsEnabled)
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 20,
+              child: Center(
+                child: UploadStatusBanner(
+                  queue: UploadQueue.instance ??=
+                      UploadQueue(widget.recordings!),
+                ),
+              ),
+            ),
+        ] else
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: widget.embedded ? 118 : 40,
+            child: Center(child: _withUploads(_shutter())),
+          ),
+      ],
+    );
+  }
+
+  Widget _withUploads(Widget shutter) {
+    if (!_uploadsEnabled) return shutter;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        UploadStatusBanner(
+          queue: UploadQueue.instance ??= UploadQueue(widget.recordings!),
+        ),
+        const SizedBox(height: 14),
+        shutter,
       ],
     );
   }
 
   /// Room left under [CameraScreen.topBar] so the camera's own labels
   /// don't sit beneath it.
-  double get _topBarSpace => widget.topBar == null ? 0 : 56;
+  double get _topBarSpace => widget.topBar == null
+      ? 0
+      : MediaQuery.orientationOf(context) == Orientation.landscape
+          ? 56
+          : 96;
 
   /// Fills the screen without distorting, in either orientation.
   ///
@@ -601,44 +619,22 @@ class _CameraScreenState extends State<CameraScreen> {
   /// A start or stop request is on its way to the server.
   bool _requesting = false;
 
-  /// This phone pressed Start, so it plays the sync beep for the take.
-  bool _beepOnNextStart = false;
-  SyncBeep? _beep;
-  Timer? _pendingBeep;
-
-  /// This phone pressed Stop, so it plays the end beep.
-  bool _beepOnNextStop = false;
-  SyncBeep? _endBeep;
-  Timer? _pendingEndBeep;
-
   /// The host's shutter starts or stops the take on every device; the server
   /// then sends the shared start (or stop) back here like everywhere else.
   Future<void> _hostShutter() async {
     final socket = widget.socket;
     final sessionId = widget.sessionId;
     if (socket == null || sessionId == null || _requesting) return;
-    // Already stopping: the cameras are just recording the end beep.
+    // Already stopping: the cameras are just rolling on to the stop's time.
     if (_pendingStop?.isActive ?? false) return;
     final stopping = _recording || (_pendingStart?.isActive ?? false);
     setState(() => _requesting = true);
-    // Loaded now so it plays on time when the start (or stop) comes back.
-    if (!stopping) {
-      _beepOnNextStart = true;
-      _beep ??= SyncBeep();
-      await _beep!.prepare().catchError((_) {});
-    } else {
-      _beepOnNextStop = true;
-      _endBeep ??= SyncBeep(tones: kEndBeepTonesHz);
-      await _endBeep!.prepare().catchError((_) {});
-    }
     final error = stopping
         ? await socket.requestStop(sessionId)
         : await socket.requestStart(sessionId);
     if (!mounted) return;
     setState(() => _requesting = false);
     if (error != null) {
-      _beepOnNextStart = false;
-      _beepOnNextStop = false;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(error)));
     }
@@ -646,49 +642,38 @@ class _CameraScreenState extends State<CameraScreen> {
 
   Widget _shutter() {
     // In a session only the host's shutter does anything; everyone else's
-    // camera follows the host's start and stop.
+    // camera follows the host's start and stop, and a tap on their greyed
+    // out shutter says why.
     if (!widget.isSolo && !widget.canControl) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _withSideButtons(Opacity(opacity: 0.35, child: _shutterButton())),
-          const SizedBox(height: 10),
-          Text(
-            _recording ? 'Recording' : 'Waiting for the host to start',
-            style: const TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w600,
-              shadows: [Shadow(blurRadius: 6, color: Colors.black)],
-            ),
-          ),
-        ],
-      );
+      return _withSideButtons(GestureDetector(
+        onTap: _explainHostOnly,
+        child: Opacity(opacity: 0.35, child: _shutterButton()),
+      ));
     }
-    final shutter = GestureDetector(
+    return _withSideButtons(GestureDetector(
       onTap: widget.isSolo
           ? (_recording ? _stopRecording : _startRecording)
           : _hostShutter,
       child: _shutterButton(),
-    );
-    if (widget.isSolo || _recording) return _withSideButtons(shutter);
-    // The host's shutter starts every camera and plays the sync beep; it
-    // lines up best from the middle of the room (sound takes ~3 ms a metre).
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        _withSideButtons(shutter),
-        const SizedBox(height: 10),
-        const Text(
-          'Starts every camera with a beep.\nBest from the middle of the room, volume up.',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 12,
-            height: 1.3,
-            shadows: [Shadow(blurRadius: 6, color: Colors.black)],
+    ));
+  }
+
+  void _explainHostOnly() {
+    final action = _recording ? 'stop' : 'start';
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("You can't $action recording"),
+        content: const Text(
+            "Only the session's host or a group admin can start and stop "
+            'recording. Your camera records when they do.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('OK'),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
@@ -727,24 +712,24 @@ class _CameraScreenState extends State<CameraScreen> {
     final active =
         _recording || (!widget.isSolo && (_pendingStart?.isActive ?? false));
     return Container(
-        width: 72,
-        height: 72,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: Colors.white24,
-          border: Border.all(color: Colors.white, width: 3),
-        ),
-        child: Center(
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 180),
-            width: active ? 28 : 56,
-            height: active ? 28 : 56,
-            decoration: BoxDecoration(
-              color: Colors.redAccent,
-              borderRadius: BorderRadius.circular(active ? 6 : 28),
-            ),
+      width: 72,
+      height: 72,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.white24,
+        border: Border.all(color: Colors.white, width: 3),
+      ),
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          width: active ? 28 : 56,
+          height: active ? 28 : 56,
+          decoration: BoxDecoration(
+            color: Colors.redAccent,
+            borderRadius: BorderRadius.circular(active ? 6 : 28),
           ),
         ),
-      );
+      ),
+    );
   }
 }

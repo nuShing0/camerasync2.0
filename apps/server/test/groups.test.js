@@ -50,11 +50,12 @@ beforeAll(async () => {
   const created = await request(app)
     .post("/api/groups")
     .set("Cookie", owner)
-    .send({ id: GROUP_ID, name: "Color Test", isPublic: true });
+    .send({ id: GROUP_ID, name: "Color Test" });
   expect(created.status).toBe(201);
+  const { inviteCode } = created.body.group;
 
   const joined = await request(app)
-    .post(`/api/groups/${GROUP_ID}/join`)
+    .post(`/api/groups/invites/${inviteCode}/join`)
     .set("Cookie", member)
     .send({});
   expect(joined.status).toBe(201);
@@ -128,7 +129,7 @@ describe("POST /api/groups (team color)", () => {
     const created = await request(app)
       .post("/api/groups")
       .set("Cookie", owner)
-      .send({ id: `${GROUP_ID}b`, name: "Default Color", isPublic: true });
+      .send({ id: `${GROUP_ID}b`, name: "Default Color" });
     expect(created.status).toBe(201);
     expect(created.body.group.primaryColor).toBe("#ead217");
 
@@ -137,5 +138,18 @@ describe("POST /api/groups (team color)", () => {
       .set("Cookie", owner)
       .send({ id: `${GROUP_ID}c`, name: "Bad Color", isPublic: true, primaryColor: "#123456" });
     expect(rejected.status).toBe(400);
+  });
+});
+
+describe("POST /api/groups (IDs)", () => {
+  it("makes the ID from the name when none is sent", async () => {
+    const created = await request(app)
+      .post("/api/groups")
+      .set("Cookie", owner)
+      .send({ name: "Dance Team!" });
+    expect(created.status).toBe(201);
+    const { id } = created.body.group;
+    expect(id).toMatch(/^danceteam[a-z0-9]{3}$/);
+    await pool.query("DELETE FROM groups WHERE group_id = $1", [id]);
   });
 });

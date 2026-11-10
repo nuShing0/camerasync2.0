@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext.jsx";
@@ -8,6 +8,7 @@ import { NotificationList } from "../components/NotificationList.jsx";
 import { getNotifications, markNotificationsSeen } from "../api/notifications.js";
 import { getSessions, joinSession } from "../api/recordings.js";
 import { groupTile } from "../theme/groupTheme.js";
+import { LiveCard, NowRow } from "../components/LiveCard.jsx";
 
 const NOTIFICATIONS_ON_HOME = 4;
 const WEEK_ON_HOME = 4;
@@ -44,12 +45,16 @@ function dayLabel(date, now) {
   return date.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 
+// "2026-10-29", how the calendar takes a day.
+const dayParam = (date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+
 const timeLabel = (date) => date.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
-/// Home dashboard: a line of counts, a slim bar for each session live or
-/// open to join right now, recent sessions as a grid of video cards, and
-/// beside them this week's sessions (the next one marked) and the newest
-/// notifications.
+/// Home dashboard: a line of counts, a card for each session live or open to
+/// join right now above recent sessions (a grid of video cards), and beside
+/// them one column with this week (a day strip and what's scheduled) and the
+/// newest notifications.
 export function HomeScreen() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -182,42 +187,21 @@ export function HomeScreen() {
 
         {error && <p className="home-error">{error}</p>}
 
-        {/* Right now: a slim bar per session that's live or open to join,
-            in the team color. Nothing upcoming here; that's This week. */}
-        {nowSessions.length > 0 && (
-          <NowRow count={nowSessions.length}>
-            {nowSessions.map((session) => (
-              <div className="home-now-bar" key={session.id}>
-                {/* The tag and details on a small line above the name, so
-                    the name has the bar's width. */}
-                <span className="home-now-text">
-                  <span className="home-now-tag">
-                    {session.status === "active"
-                      ? <><span className="home-live-dot" />Live now</>
-                      : "Starting now"}
-                    <span className="home-now-meta">
-                      {" · "}{groupName(session.groupId)}
-                      {session.status === "active" &&
-                        ` · ${session.activeMemberCount} ${session.activeMemberCount === 1 ? "device" : "devices"}`}
-                    </span>
-                  </span>
-                  <strong>{session.name}</strong>
-                </span>
-                {session.status === "active" && session.isJoined ? (
-                  <button type="button" className="home-now-join" onClick={() => navigate(`/record/${session.id}`)}>
-                    Enter
-                  </button>
-                ) : (
-                  <button type="button" className="home-now-join" disabled={joiningId === session.id}
-                    onClick={() => joinLiveSession(session.id)}>
-                    {joiningId === session.id ? "Joining…" : "Join"}
-                  </button>
-                )}
-              </div>
-            ))}
-          </NowRow>
-        )}
         <div className="home-columns">
+          <div className="home-main">
+          {/* Right now: a card per session that's live or open to join, in
+              the team color, above the videos. Nothing upcoming here; that's
+              This week. */}
+          {nowSessions.length > 0 && (
+            <NowRow count={nowSessions.length}>
+              {nowSessions.map((session) => (
+                <LiveCard key={session.id} session={session} groupName={groupName(session.groupId)}
+                  joining={joiningId === session.id}
+                  onEnter={() => navigate(`/record/${session.id}`)}
+                  onJoin={() => joinLiveSession(session.id)} />
+              ))}
+            </NowRow>
+          )}
           <section>
             <div className="home-section-row">
               <h2 className="home-section">Recent sessions</h2>
@@ -258,9 +242,9 @@ export function HomeScreen() {
               </ul>
             )}
           </section>
+          </div>
 
-          {/* On a wide screen these sit as their own columns beside the
-              videos, so neither is pushed below the other. */}
+          {/* One column beside the videos: the week, then notifications. */}
           <aside className="home-side">
             <section>
               <div className="home-section-row">
@@ -269,9 +253,11 @@ export function HomeScreen() {
                   Calendar
                 </button>
               </div>
+              <WeekStrip sessions={sessions} now={now} tileOf={tileOf}
+                onDay={(day) => navigate(`/calendar?day=${dayParam(day)}`)} />
               {thisWeek.length === 0 ? (
-                <EmptyNote icon="calendar" title="Nothing scheduled this week">
-                  Scheduled practices show up here.
+                <EmptyNote icon="calendar" title="Nothing else coming up this week">
+                  Scheduled sessions show up here.
                 </EmptyNote>
               ) : (
                 <ul className="home-week">
@@ -281,7 +267,7 @@ export function HomeScreen() {
                     return (
                       <li key={session.id}>
                         <button type="button"
-                          onClick={() => navigate(`/calendar?day=${at.getFullYear()}-${String(at.getMonth() + 1).padStart(2, "0")}-${String(at.getDate()).padStart(2, "0")}`)}>
+                          onClick={() => navigate(`/calendar?day=${dayParam(at)}`)}>
                           <span className="home-week-bar" style={{ background: tile?.fill ?? "#ead217" }} />
                           <span className="home-week-text">
                             {session === thisWeek[0] && (
@@ -321,16 +307,69 @@ export function HomeScreen() {
                 <p className="home-quiet">Loading…</p>
               ) : notifications.length === 0 ? (
                 <EmptyNote icon="bell" title="You're all caught up">
-                  Comments, new teammates and practices starting show up here.
+                  Comments, new teammates and sessions starting show up here.
                 </EmptyNote>
               ) : (
-                <NotificationList notifications={notifications} />
+                <NotificationGroups notifications={notifications} now={now} />
               )}
             </section>
           </aside>
         </div>
       </div>
     </div>
+  );
+}
+
+/// Monday to Sunday of this week: today in the accent color, and a dot in
+/// the group's color for each session that day (up to three). A day opens
+/// the calendar there.
+function WeekStrip({ sessions, now, tileOf, onDay }) {
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+  const days = Array.from({ length: 7 }, (_, i) =>
+    new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i));
+  return (
+    <div className="home-strip">
+      {days.map((day) => {
+        const onDayOf = sessions.filter((session) => session.status !== "cancelled"
+          && sameDay(new Date(session.scheduledAt), day));
+        const label = day.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+        return (
+          <button type="button" key={day.getTime()} onClick={() => onDay(day)}
+            className={sameDay(day, now) ? "home-strip-day home-strip-today" : "home-strip-day"}
+            aria-label={`${label}, ${onDayOf.length} ${onDayOf.length === 1 ? "session" : "sessions"}`}>
+            <span className="home-strip-letter">{day.toLocaleDateString(undefined, { weekday: "narrow" })}</span>
+            <span className="home-strip-num">{day.getDate()}</span>
+            <span className="home-strip-dots">
+              {onDayOf.slice(0, 3).map((session) => (
+                <span key={session.id} style={{ background: tileOf(session)?.fill ?? "#ead217" }} />
+              ))}
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/// The newest notifications, under Today and Earlier.
+function NotificationGroups({ notifications, now }) {
+  const today = notifications.filter((n) => sameDay(new Date(n.at), now));
+  const earlier = notifications.filter((n) => !sameDay(new Date(n.at), now));
+  return (
+    <>
+      {today.length > 0 && (
+        <>
+          <h3 className="home-notif-when">Today</h3>
+          <NotificationList notifications={today} />
+        </>
+      )}
+      {earlier.length > 0 && (
+        <>
+          <h3 className="home-notif-when">Earlier</h3>
+          <NotificationList notifications={earlier} />
+        </>
+      )}
+    </>
   );
 }
 
@@ -354,46 +393,6 @@ function EmptyNote({ icon, title, children }) {
   );
 }
 
-/// The live bars in one row: one fills it, two share it, and more slide
-/// sideways (drag, scroll, or the arrows), snapping bar by bar.
-function NowRow({ count, children }) {
-  const rowRef = useRef(null);
-  const [edges, setEdges] = useState({ start: true, end: true });
-  const update = () => {
-    const row = rowRef.current;
-    if (!row) return;
-    setEdges({
-      start: row.scrollLeft <= 2,
-      end: row.scrollLeft + row.clientWidth >= row.scrollWidth - 2,
-    });
-  };
-  useEffect(() => {
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [count]);
-  const slide = (direction) => {
-    const row = rowRef.current;
-    const bar = row?.firstElementChild;
-    if (bar) row.scrollBy({ left: direction * (bar.clientWidth + 12), behavior: "smooth" });
-  };
-  return (
-    <div className="home-now-wrap">
-      <div className={count > 2 ? "home-now home-now-many" : "home-now"} ref={rowRef} onScroll={update}>
-        {children}
-      </div>
-      {!edges.start && (
-        <button type="button" className="home-now-arrow home-now-arrow-left" aria-label="Earlier sessions"
-          onClick={() => slide(-1)}>‹</button>
-      )}
-      {!edges.end && (
-        <button type="button" className="home-now-arrow home-now-arrow-right" aria-label="More live sessions"
-          onClick={() => slide(1)}>›</button>
-      )}
-    </div>
-  );
-}
-
 const css = `
   /* Centered and wide on a desktop, like the calendar. */
   .home-page { max-width: 1480px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
@@ -404,51 +403,11 @@ const css = `
   .home-counts a { color: #d0d0d0; text-decoration: none; }
   .home-counts a:hover { color: var(--accent); text-decoration: underline; }
 
-  /* Right now: one slim team-colored bar per live or open session, side by
-     side (a third wraps to a new row only when they don't fit). */
-  .home-now-wrap { position: relative; }
-  .home-now {
-    display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory;
-    scrollbar-width: none;
-  }
-  .home-now::-webkit-scrollbar { display: none; }
-  /* min-width 0: a bar's name and details shorten with "…" rather than
-     pushing the second bar out of view. */
-  .home-now > .home-now-bar { flex: 1 1 0; min-width: 0; scroll-snap-align: start; }
-  /* Three or more: two in view at a time, the rest a slide away. */
-  .home-now-many > .home-now-bar { flex: 0 0 calc(50% - 6px); }
-  .home-now-arrow {
-    position: absolute; top: 50%; transform: translateY(-50%); z-index: 1;
-    width: 34px; height: 34px; padding: 0; border: 1px solid #333; border-radius: 50%;
-    background: #111; color: #fff; font: inherit; font-size: 1.3rem; line-height: 1; cursor: pointer;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.5);
-  }
-  .home-now-arrow:hover { border-color: var(--accent); }
-  .home-now-arrow-left { left: -42px; }
-  .home-now-arrow-right { right: -42px; }
-  .home-now-bar {
-    display: flex; align-items: center; gap: 14px; min-width: 0;
-    box-sizing: border-box; padding: 10px 12px 10px 20px; border-radius: 18px;
-    /* Same look as the phone's live card: the team color itself, black or
-       white text on it, and a pill Join in the text color. */
-    background: var(--brand); color: var(--brand-ink);
-  }
-  .home-now-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
-  .home-now-tag { display: flex; align-items: center; min-width: 0; font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
-  .home-now-bar strong { font-size: 1.1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .home-now-meta { min-width: 0; margin-left: 4px; opacity: 0.7; font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
-  .home-now-join {
-    flex: 0 0 auto; font: inherit; font-weight: 700; padding: 0.5rem 1.4rem;
-    border: none; border-radius: 999px; background: var(--brand-ink); color: var(--brand); cursor: pointer;
-  }
-  .home-now-join:hover { opacity: 0.9; }
-  .home-now-join:disabled { cursor: default; opacity: 0.6; }
-  .home-live-dot { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; background: #f0432e; }
+  .home-main { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
 
   /* Recent sessions beside this week and notifications. */
-  .home-columns { display: grid; grid-template-columns: minmax(0, 1fr) 320px 320px; gap: 32px; align-items: start; }
-  /* Wide: This week and Notifications are columns of their own. */
-  .home-side { display: contents; }
+  .home-columns { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 36px; align-items: start; }
+  .home-side { display: flex; flex-direction: column; gap: 32px; min-width: 0; }
   .home-side > section { min-width: 0; }
   .home-section-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
   .home-section { margin: 0; font-size: 1.15rem; font-weight: 700; }
@@ -499,6 +458,24 @@ const css = `
   }
   .home-card-meta { color: #8a8a8a; font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* This week's days: letter, date, and a dot per session. */
+  .home-strip { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; margin-bottom: 8px; }
+  .home-strip-day {
+    display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 0;
+    border: none; border-radius: 10px; background: none; color: #f0f0f0; font: inherit; cursor: pointer;
+  }
+  .home-strip-day:hover { background: #1e1e1e; }
+  .home-strip-letter { color: #8a8a8a; font-size: 0.72rem; font-weight: 700; }
+  .home-strip-num { font-size: 1.05rem; font-weight: 600; }
+  .home-strip-today .home-strip-letter, .home-strip-today .home-strip-num { color: var(--accent); font-weight: 800; }
+  .home-strip-dots { display: flex; gap: 3px; height: 6px; }
+  .home-strip-dots span { width: 6px; height: 6px; border-radius: 50%; }
+  .home-notif-when {
+    margin: 4px 0 2px; color: #8a8a8a; font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 0.6px; text-transform: uppercase;
+  }
+  .home-notif-when ~ .home-notif-when { margin-top: 12px; }
+
   /* A plain list like Notifications: thin lines between rows, no boxes. */
   .home-week { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
   .home-week li + li { border-top: 1px solid #242424; }
@@ -524,16 +501,7 @@ const css = `
     background: #2a1a1a; color: #ff8a80;
   }
 
-  /* Narrower: the two stack in one column beside the videos. */
-  @media (max-width: 1400px) {
-    .home-columns { grid-template-columns: minmax(0, 1fr) 360px; }
-    .home-side { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
-  }
   @media (max-width: 1080px) {
     .home-columns { grid-template-columns: 1fr; }
-  }
-  @media (max-width: 560px) {
-    .home-now > .home-now-bar, .home-now-many > .home-now-bar { flex: 0 0 100%; }
-
   }
 `;

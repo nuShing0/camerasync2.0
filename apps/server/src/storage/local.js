@@ -56,9 +56,19 @@ export function createLocalStorage({ uploadDir }) {
 }
 
 // An upload interrupted by a crash leaves its temp file behind. Nothing can be
-// mid-upload while the server is starting, so anything here is garbage.
+// mid-upload while the server is starting, so anything here is garbage; all
+// but the last minute's, though, which another process sharing the folder
+// (the tests run several at once) may be writing right now. A resumable
+// upload's .part file waits for the rest of it (see routes/file.js).
 function sweepIncoming(incomingDir) {
+  const before = Date.now() - 60_000;
   for (const name of fs.readdirSync(incomingDir)) {
-    fs.rmSync(path.join(incomingDir, name), { force: true });
+    if (name.endsWith(".part")) continue;
+    const file = path.join(incomingDir, name);
+    try {
+      if (fs.statSync(file).mtimeMs < before) fs.rmSync(file, { force: true });
+    } catch {
+      // Gone already.
+    }
   }
 }

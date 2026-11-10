@@ -67,11 +67,12 @@ beforeAll(async () => {
   const created = await request(app)
     .post("/api/groups")
     .set("Cookie", people.owner.cookie)
-    .send({ id: GROUP, name: "Rules Test", isPublic: true });
+    .send({ id: GROUP, name: "Rules Test" });
   expect(created.status).toBe(201);
+  const { inviteCode } = created.body.group;
   for (const label of ["admin", "member", "viewer", "coach2"]) {
     const joined = await request(app)
-      .post(`/api/groups/${GROUP}/join`)
+      .post(`/api/groups/invites/${inviteCode}/join`)
       .set("Cookie", people[label].cookie)
       .send({});
     expect(joined.status).toBe(201);
@@ -93,26 +94,16 @@ afterAll(async () => {
 });
 
 describe("owner-only group settings", () => {
-  it("lets the owner rename the group and make it private", async () => {
+  it("lets the owner rename the group", async () => {
     const res = await request(app)
       .patch(`/api/groups/${GROUP}`)
       .set("Cookie", people.owner.cookie)
-      .send({ name: "Renamed", isPublic: false, password: "team-secret" });
+      .send({ name: "Renamed" });
     expect(res.status).toBe(200);
-    expect(res.body.group).toMatchObject({ name: "Renamed", isPublic: false });
+    expect(res.body.group).toMatchObject({ name: "Renamed" });
   });
 
-  it("needs a password to go private", async () => {
-    await request(app).patch(`/api/groups/${GROUP}`).set("Cookie", people.owner.cookie)
-      .send({ isPublic: true });
-    const res = await request(app)
-      .patch(`/api/groups/${GROUP}`)
-      .set("Cookie", people.owner.cookie)
-      .send({ isPublic: false });
-    expect(res.status).toBe(400);
-  });
-
-  it("refuses admins: they can change the color, not the name or privacy", async () => {
+  it("refuses admins: they can change the color, not the name", async () => {
     const rename = await request(app)
       .patch(`/api/groups/${GROUP}`)
       .set("Cookie", people.admin.cookie)

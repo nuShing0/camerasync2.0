@@ -40,3 +40,17 @@ export async function ensureRecordingNumber(sessionId, startedAtMs) {
     client.release();
   }
 }
+
+/**
+ * Whether the recording at `startedAtMs` in `sessionId` was deleted. Its
+ * number stays taken (so later recordings keep theirs) and marked, so a
+ * device still uploading it is turned away rather than bringing it back.
+ */
+export async function isRecordingDeleted(sessionId, startedAtMs) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM session_recordings
+      WHERE session_id = $1 AND started_at_ms = $2 AND deleted_at IS NOT NULL`,
+    [sessionId, startedAtMs]
+  );
+  return rows.length > 0;
+}

@@ -65,7 +65,7 @@ function Root() {
         <Route path="/" element={<HomeScreen />} />
         <Route path="/groups" element={<GroupsScreen />} />
         <Route path="/groups/:id" element={<GroupSettingsScreen />} />
-        <Route path="/join/:id" element={<JoinGroupScreen />} />
+        <Route path="/join/:code" element={<JoinGroupScreen />} />
         {/* The old Record page: starting is the sidebar's + New session. */}
         <Route path="/record" element={<Navigate to="/watch" replace />} />
         <Route path="/record/:sessionId" element={<ActiveSessionScreen />} />

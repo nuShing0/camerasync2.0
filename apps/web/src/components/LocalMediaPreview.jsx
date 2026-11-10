@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 // The room as it sounds. Browsers default to call processing that cancels
-// sound from this computer's own speakers, which would erase the sync beep
-// it plays when it starts a take (so this angle couldn't be lined up by it),
-// and that also dulls music and pumps the volume.
+// sound from this computer's own speakers, dulls music and pumps the volume.
 const RECORDING_AUDIO = {
   echoCancellation: false,
   noiseSuppression: false,
@@ -44,8 +42,10 @@ async function alreadyAllowed() {
 }
 
 // Once the browser allows the camera, sessions open straight on it (no
-// prompt). Hosts switch to controlling from the session's header.
-export function LocalMediaPreview({ disabled, onReady, onDecline }) {
+// prompt). The preview fills its box, with the camera's name on a chip and a
+// settings button for picking the camera and microphone; `children` (the
+// session's own controls) sit over the video too.
+export function LocalMediaPreview({ disabled, onReady, onDecline, children }) {
   const videoRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -56,6 +56,7 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
   // Until we know whether the browser already allows the camera.
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // puts the current stream in the local preview
   useEffect(() => {
@@ -149,6 +150,14 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
     (device) => device.kind === "audioinput"
   );
 
+  // The camera's name for the chip: the one picked, or what the browser gave.
+  const liveCameraId = stream?.getVideoTracks()[0]?.getSettings().deviceId;
+  const cameraName = cameras.find((camera) => camera.deviceId === (cameraId || liveCameraId))?.label
+    || stream?.getVideoTracks()[0]?.label || "";
+
+  // Locked while a take runs, like the lists were.
+  useEffect(() => { if (disabled) setSettingsOpen(false); }, [disabled]);
+
   if (!accepted && checking) {
     return <p className="local-media-note">Starting camera…</p>;
   }
@@ -184,42 +193,59 @@ export function LocalMediaPreview({ disabled, onReady, onDecline }) {
       <style>{mediaCss}</style>
       <video ref={videoRef} autoPlay muted playsInline />
 
-      <div className="local-media-devices">
-        <label>
-          Camera
-          <select
-            value={cameraId}
-            onChange={changeCamera}
-            disabled={disabled || requesting}
-          >
-            <option value="">System default</option>
-            {cameras.map((camera, index) => (
-              <option value={camera.deviceId} key={camera.deviceId}>
-                {camera.label || `Camera ${index + 1}`}
-              </option>
-            ))}
-          </select>
-        </label>
+      <span className="local-media-chip">
+        This camera{cameraName && <> · {cameraName.replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)$/i, "")}</>}
+      </span>
 
-        <label>
-          Microphone
-          <select
-            value={microphoneId}
-            onChange={changeMicrophone}
-            disabled={disabled || requesting}
-          >
-            <option value="">System default</option>
-            {microphones.map((microphone, index) => (
-              <option value={microphone.deviceId} key={microphone.deviceId}>
-                {microphone.label || `Microphone ${index + 1}`}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
+      {children}
 
-      {requesting && <p className="local-media-note">Switching device...</p>}
-      {error && <p className="local-media-error">{error}</p>}
+      <button type="button" className="local-media-settings" aria-label="Camera and microphone"
+        aria-expanded={settingsOpen} title={disabled ? "Available once this take has finished" : "Camera and microphone"}
+        disabled={disabled} onClick={() => setSettingsOpen((open) => !open)}>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2"
+          strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3" />
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+        </svg>
+      </button>
+
+      {settingsOpen && (
+        <div className="local-media-devices" role="dialog" aria-label="Camera and microphone">
+          <label>
+            Camera
+            <select
+              value={cameraId}
+              onChange={changeCamera}
+              disabled={disabled || requesting}
+            >
+              <option value="">System default</option>
+              {cameras.map((camera, index) => (
+                <option value={camera.deviceId} key={camera.deviceId}>
+                  {camera.label || `Camera ${index + 1}`}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label>
+            Microphone
+            <select
+              value={microphoneId}
+              onChange={changeMicrophone}
+              disabled={disabled || requesting}
+            >
+              <option value="">System default</option>
+              {microphones.map((microphone, index) => (
+                <option value={microphone.deviceId} key={microphone.deviceId}>
+                  {microphone.label || `Microphone ${index + 1}`}
+                </option>
+              ))}
+            </select>
+          </label>
+          {requesting && <p className="local-media-note">Switching device...</p>}
+          {error && <p className="local-media-error">{error}</p>}
+        </div>
+      )}
     </section>
   );
 }
@@ -253,24 +279,33 @@ const mediaCss = `
     background: var(--accent);
     color: var(--accent-ink);
   }
-  .local-media {
-    min-width: 0;
-  }
+  /* The camera fills the session's stage; chips and controls float on it. */
+  .local-media { position: absolute; inset: 0; }
   .local-media video {
-    display: block;
-    width: 100%;
-    max-height: 62vh;
-    aspect-ratio: 16 / 9;
-    border: 1px solid #272727;
-    border-radius: 9px;
-    background: #111;
-    object-fit: cover;
+    display: block; width: 100%; height: 100%;
+    background: #111; object-fit: cover;
   }
+  .local-media-chip {
+    position: absolute; top: 18px; left: 18px; max-width: calc(50% - 30px);
+    display: inline-flex; align-items: center; height: 34px; padding: 0 14px; box-sizing: border-box;
+    border-radius: 17px; background: rgba(20,20,22,0.6); backdrop-filter: blur(12px);
+    color: #fff; font-size: 0.82rem; font-weight: 600;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .local-media .local-media-settings {
+    position: absolute; right: 24px; bottom: 38px; z-index: 2;
+    display: flex; align-items: center; justify-content: center;
+    width: 44px; height: 44px; padding: 0; border: none; border-radius: 22px;
+    background: rgba(20,20,22,0.6); backdrop-filter: blur(12px); color: #fff; cursor: pointer;
+  }
+  .local-media .local-media-settings[aria-expanded="true"] { background: #fff; color: #111; }
+  .local-media .local-media-settings:disabled { opacity: 0.4; cursor: default; }
   .local-media-devices {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.8rem;
-    margin-top: 0.9rem;
+    position: absolute; right: 24px; bottom: 92px; z-index: 3;
+    width: min(320px, calc(100% - 48px)); box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 0.8rem; padding: 16px;
+    border-radius: 16px; background: rgba(20,20,22,0.85); backdrop-filter: blur(16px);
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
   }
   .local-media-devices label {
     display: flex;
@@ -283,23 +318,18 @@ const mediaCss = `
     width: 100%;
     padding: 0.55rem 0.65rem;
     border: 1px solid #383838;
-    border-radius: 7px;
+    border-radius: 9px;
     background: #171717;
     color: #eee;
     font: inherit;
   }
   .local-media-note,
   .local-media-error {
-    margin: 0.6rem 0 0;
+    margin: 0;
     color: #888;
     font-size: 0.8rem;
   }
   .local-media-error {
     color: #ffaaa5;
-  }
-  @media (max-width: 650px) {
-    .local-media-devices {
-      grid-template-columns: 1fr;
-    }
   }
 `;

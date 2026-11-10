@@ -4,6 +4,7 @@ import 'package:external_display/transfer_parameters.dart';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
+import '../api/recordings_api.dart' show isSignedLink, sameFile;
 import '../playback/angle_sync.dart';
 import '../recordings/angle_layout.dart';
 import '../theme.dart';
@@ -127,8 +128,8 @@ class _TvScreenState extends State<TvScreen> {
     final preview = angle.previewUrl;
     if (preview == null || i == _focused) return angle.url;
     final screen = MediaQuery.of(context);
-    final area = Size(screen.size.width - 2 * _margin,
-        screen.size.height - 2 * _margin);
+    final area =
+        Size(screen.size.width - 2 * _margin, screen.size.height - 2 * _margin);
     return usePreviews(area, _liveAngles.length, screen.devicePixelRatio,
             gap: _gap)
         ? preview
@@ -249,7 +250,7 @@ class _TvScreenState extends State<TvScreen> {
     for (final i in _players.keys.toList()) {
       // Closed when it's off screen, or to switch between its preview and
       // the original.
-      if (!live.contains(i) || _playerUrls[i] != _urlFor(i)) {
+      if (!live.contains(i) || !sameFile(_playerUrls[i]!, _urlFor(i))) {
         _playerUrls.remove(i);
         await _players.remove(i)!.dispose();
       }
@@ -292,9 +293,13 @@ class _TvScreenState extends State<TvScreen> {
 
   Future<VideoPlayerController?> _open(int i) async {
     final cookie = _cookie;
+    final url = _urlFor(i);
     final player = VideoPlayerController.networkUrl(
-      Uri.parse(_urlFor(i)),
-      httpHeaders: {if (cookie != null) 'Cookie': cookie},
+      Uri.parse(url),
+      // The login only goes to our server; a CDN link is signed.
+      httpHeaders: {
+        if (cookie != null && !isSignedLink(url)) 'Cookie': cookie,
+      },
     );
     try {
       await player.initialize();

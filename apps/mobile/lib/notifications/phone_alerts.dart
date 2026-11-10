@@ -7,8 +7,8 @@ import '../api/notifications_api.dart';
 import '../auth/auth_service.dart';
 
 /// Phone notifications for what happens in the user's groups: comments on
-/// recordings, people joining and practices starting, filtered by the
-/// switches in Settings (saved on the account).
+/// recordings, people joining or asking to join, and sessions starting,
+/// filtered by the switches in Settings (saved on the account).
 ///
 /// The app checks the notifications feed every minute while it is open or
 /// in the background. Alerts while the app is fully closed need push through
@@ -28,7 +28,8 @@ class PhoneAlerts {
   static const _channel = AndroidNotificationDetails(
     'group-activity',
     'Group activity',
-    channelDescription: 'Comments, people joining and practices starting',
+    channelDescription:
+        'Comments, people joining or asking to join, and sessions starting',
     importance: Importance.high,
     priority: Priority.high,
     // The status bar needs a white-on-transparent icon; the full-color app
@@ -128,7 +129,8 @@ bool wanted(AppNotification n, Map<String, bool> prefs) {
   if (prefs['push'] == false) return false;
   final kind = switch (n.type) {
     'comment' => 'comments',
-    'join' => 'joins',
+    // Requests to join go with the joins switch, as on the server.
+    'join' || 'request' => 'joins',
     _ => 'sessions',
   };
   return prefs[kind] != false;
@@ -137,10 +139,14 @@ bool wanted(AppNotification n, Map<String, bool> prefs) {
 String alertTitle(AppNotification n) => switch (n.type) {
       'comment' => '${n.actorName} commented on ${n.sessionName ?? 'a recording'}',
       'join' => '${n.actorName} joined ${n.groupName}',
+      'request' => '${n.actorName} asked to join ${n.groupName}',
       _ => n.isLivePractice
-          ? '${n.actorName} started ${n.sessionName ?? 'a practice'}. Join now'
-          : '${n.actorName} started ${n.sessionName ?? 'a practice'}',
+          ? '${n.actorName} started ${n.sessionName ?? 'a session'}. Join now'
+          : '${n.actorName} started ${n.sessionName ?? 'a session'}',
     };
 
-String? alertBody(AppNotification n) =>
-    n.type == 'comment' ? '"${n.commentBody}"' : n.groupName;
+String? alertBody(AppNotification n) => switch (n.type) {
+      'comment' => '"${n.commentBody}"',
+      'request' => "Approve or decline it on the group's page.",
+      _ => n.groupName,
+    };

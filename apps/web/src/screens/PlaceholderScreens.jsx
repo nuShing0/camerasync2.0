@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import {
-  createGroup,
-  getGroups,
-  joinGroup,
-  searchGroups,
-} from "../api/groups.js";
+import { getSessions } from "../api/recordings.js";
+import { createGroup, getGroups } from "../api/groups.js";
 import { useAuth } from "../auth/AuthContext.jsx";
 import { EmptyState } from "../components/EmptyState.jsx";
+import { JoinGroupForm } from "../components/JoinGroupForm.jsx";
 import { TeamColorPicker } from "../components/TeamColorPicker.jsx";
 import { useGroupTheme } from "../theme/GroupThemeContext.jsx";
 import { groupTile } from "../theme/groupTheme.js";
@@ -17,35 +14,46 @@ import { DEFAULT_TEAM_COLOR } from "../theme/teamColors.js";
 // Shells for the sections that don't have backing APIs yet. Each states what
 // it will hold so the nav is honest about what's built vs. planned.
 
-const styles = {
-  title: { margin: "0 0 0.5rem", fontSize: "1.8rem" },
-  muted: { color: "#999", lineHeight: 1.6, maxWidth: "48ch" },
-};
-
-// One group on the Groups list: filled with its team color, with its
-// recordings and a gear that opens the group's settings page.
-function GroupTile({ group, isPrimary, dragging, dragHandlers }) {
+// One group on the Groups list: a card in its team color with its name,
+// your role, and what's going on (live now, or its sessions and when the
+// last one was). The whole card opens the group's page; drag to reorder.
+function GroupTile({ group, isPrimary, dragging, dragHandlers, sessions }) {
   const navigate = useNavigate();
   const tile = groupTile(group);
+  const { user } = useAuth();
+  const role = Number(user?.id) === group.owner ? "Owner"
+    : { admin: "Admin", member: "Member", viewer: "Viewer" }[group.role] ?? "Member";
+  const live = sessions.find((session) => session.status === "active");
+  const finished = sessions
+    .filter((session) => session.status === "complete")
+    .sort((a, b) => new Date(b.scheduledAt) - new Date(a.scheduledAt));
 
-  // The whole tile opens the group's page: its recordings, starting a
-  // session, and its settings.
   return (
     <button
       type="button"
       draggable
       {...dragHandlers}
-      className={`group-row group-row-link${dragging ? " group-row-dragging" : ""}${tile ? ` group-tile ${tile.dark ? "group-tile-dark" : "group-tile-light"}` : ""}`}
-      style={tile ? { background: tile.fill, color: tile.ink, borderColor: tile.fill } : undefined}
+      className={`group-card${dragging ? " group-card-dragging" : ""}`}
+      style={tile ? { background: tile.fill, color: tile.ink } : undefined}
       onClick={() => navigate(`/groups/${encodeURIComponent(group.id)}`)}
     >
-      <span className="group-tile-grip" aria-hidden="true" title="Drag to reorder">⠿</span>
-      <span className="group-tile-name">
-        {group.name}
-        {isPrimary && <span className="group-tile-badge">Primary</span>}
+      <span className="group-card-top">
+        <span className="group-card-role">{role}</span>
+        {isPrimary && <span className="group-card-role">Primary</span>}
+        <span className="group-card-grip" aria-hidden="true" title="Drag to reorder">⠿</span>
       </span>
-      <span className="group-tile-id">{group.id}</span>
-      <span className="group-tile-chevron" aria-hidden="true">›</span>
+      <span className="group-card-name">{group.name}</span>
+      <span className="group-card-foot">
+        {live ? (
+          <span className="group-card-live"><span />Live · {live.name}</span>
+        ) : (
+          <span>
+            {finished.length} {finished.length === 1 ? "session" : "sessions"}
+            {finished[0] && ` · last ${new Date(finished[0].scheduledAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`}
+          </span>
+        )}
+        <span className="group-card-chevron" aria-hidden="true">›</span>
+      </span>
     </button>
   );
 }
@@ -92,70 +100,27 @@ export function GroupsScreen() {
   const { updateProfile } = useAuth();
   const [openPanel, setOpenPanel] = useState(null);
   const [groups, setGroups] = useState([]);
+  // Every session, to show each group's live one and how many it has had.
+  const [sessions, setSessions] = useState([]);
   // The group being dragged to a new place in the list, by ID.
   const [draggingId, setDraggingId] = useState(null);
   const [orderError, setOrderError] = useState("");
   const [loading, setLoading] = useState(true);
   const [createSubmitting, setCreateSubmitting] = useState(false);
   const [createError, setCreateError] = useState("");
-  const [joinQuery, setJoinQuery] = useState("");
-  const [searchResults, setSearchResults] = useState([]);
-  const [searching, setSearching] = useState(false);
-  const [hasSearched, setHasSearched] = useState(false);
-  const [passwordGroupId, setPasswordGroupId] = useState(null);
-  const [joinPassword, setJoinPassword] = useState("");
-  const [joiningGroupId, setJoiningGroupId] = useState(null);
-  const [joinError, setJoinError] = useState("");
+  const navigate = useNavigate();
   const [form, setForm] = useState({
     name: "",
-    id: "",
-    isPublic: true,
-    password: "",
     primaryColor: DEFAULT_TEAM_COLOR,
   });
 
   useEffect(() => {
+    getSessions().then(setSessions).catch(() => {});
     getGroups()
       .then(setGroups)
       .catch((err) => setCreateError(err.message))
       .finally(() => setLoading(false));
   }, []);
-
-  useEffect(() => {
-    if (openPanel !== "join" || !joinQuery) {
-      setSearchResults([]);
-      setHasSearched(false);
-      setSearching(false);
-      return;
-    }
-
-    let cancelled = false;
-    const searchTimer = window.setTimeout(async () => {
-      setSearching(true);
-      setJoinError("");
-
-      try {
-        const results = await searchGroups(joinQuery);
-        if (!cancelled) {
-          setSearchResults(results);
-          setHasSearched(true);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setJoinError(err.message);
-          setSearchResults([]);
-          setHasSearched(true);
-        }
-      } finally {
-        if (!cancelled) setSearching(false);
-      }
-    }, 250);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(searchTimer);
-    };
-  }, [joinQuery, openPanel]);
 
   const updateForm = (field, value) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -164,8 +129,6 @@ export function GroupsScreen() {
   const closePanel = () => {
     setOpenPanel(null);
     setCreateError("");
-    setJoinError("");
-    setJoinQuery("");
   };
 
   const submitGroup = async (event) => {
@@ -175,17 +138,10 @@ export function GroupsScreen() {
 
     try {
       const group = await createGroup(form);
-      setGroups((current) => [group, ...current]);
       // A first group becomes the default, which themes the app.
       refreshTheme().catch(() => {});
-      setForm({
-        name: "",
-        id: "",
-        isPublic: true,
-        password: "",
-        primaryColor: DEFAULT_TEAM_COLOR,
-      });
-      setOpenPanel(null);
+      // Straight to the new group, asking to invite the team.
+      navigate(`/groups/${encodeURIComponent(group.id)}?invite=1`);
     } catch (err) {
       setCreateError(err.message);
     } finally {
@@ -193,32 +149,10 @@ export function GroupsScreen() {
     }
   };
 
-  const submitJoin = async (group, password = "") => {
-    setJoinError("");
-    setJoiningGroupId(group.id);
-
-    try {
-      const joinedGroup = await joinGroup(group.id, password);
-      setGroups((current) => {
-        const alreadyListed = current.some(
-          (item) => item.id.toLowerCase() === joinedGroup.id.toLowerCase()
-        );
-        return alreadyListed ? current : [joinedGroup, ...current];
-      });
-      refreshTheme().catch(() => {});
-      setSearchResults((current) =>
-        current.map((item) =>
-          item.id === group.id ? { ...item, isMember: true } : item
-        )
-      );
-      setPasswordGroupId(null);
-      setJoinPassword("");
-      closePanel();
-    } catch (err) {
-      setJoinError(err.message);
-    } finally {
-      setJoiningGroupId(null);
-    }
+  // Joined (or already in): open the group.
+  const joined = (group) => {
+    refreshTheme().catch(() => {});
+    navigate(`/groups/${encodeURIComponent(group.id)}`);
   };
 
   return (
@@ -226,29 +160,30 @@ export function GroupsScreen() {
       <style>{groupsCss}</style>
       <div className="groups-header">
         <div>
-          <h1 style={styles.title}>Groups</h1>
-          <p style={styles.muted}>Manage your groups and organizations.</p>
+          <h1>Groups</h1>
+          {!loading && (
+            <p>{groups.length} {groups.length === 1 ? "group" : "groups"} · drag to reorder</p>
+          )}
         </div>
         <div className="group-tools">
-          <button className="group-tool-button group-tool-primary" type="button"
-            onClick={() => setOpenPanel("create")}>
-            Create Group
-          </button>
           <button className="group-tool-button" type="button"
             onClick={() => setOpenPanel("join")}>
-            Join Group
+            Join group
+          </button>
+          <button className="group-tool-button group-tool-primary" type="button"
+            onClick={() => setOpenPanel("create")}>
+            + Create group
           </button>
         </div>
       </div>
 
       <div className="groups-grid">
         <section className="group-panel">
-          <h2>Your groups</h2>
           {loading ? (
             <p className="group-empty">Loading groups...</p>
           ) : groups.length === 0 ? (
             <EmptyState title="No groups yet">
-              Create your team's group, or use Join Group to find it by its ID.
+              Create your team's group, or use Join group with the invite your coach sent.
             </EmptyState>
           ) : (
             <div className={`group-list${draggingId ? " group-list-dragging" : ""}`}>
@@ -285,6 +220,7 @@ export function GroupsScreen() {
                     },
                   }}
                   isPrimary={activeGroup?.id === group.id}
+                  sessions={sessions.filter((session) => session.groupId === group.id)}
                 />
               ))}
             </div>
@@ -312,51 +248,6 @@ export function GroupsScreen() {
                 required
               />
             </label>
-
-            <label className="group-field">
-              ID
-              <input
-                type="text"
-                pattern="[A-Za-z0-9]+"
-                value={form.id}
-                placeholder="Letters and numbers only"
-                onChange={(event) =>
-                  updateForm(
-                    "id",
-                    event.target.value.replace(/[^a-zA-Z0-9]/g, "")
-                  )
-                }
-                required
-              />
-            </label>
-
-            <div className="group-privacy-row">
-              <label className="group-visibility">
-                <input
-                  type="checkbox"
-                  checked={form.isPublic}
-                  onChange={(event) =>
-                    updateForm("isPublic", event.target.checked)
-                  }
-                />
-                <span className="group-switch" />
-                <span>{form.isPublic ? "Public" : "Private"}</span>
-              </label>
-
-              <label className="group-field group-password">
-                Password
-                <input
-                  type="password"
-                  value={form.password}
-                  onChange={(event) =>
-                    updateForm("password", event.target.value)
-                  }
-                  placeholder="Password"
-                  readOnly={form.isPublic}
-                  required={!form.isPublic}
-                />
-              </label>
-            </div>
 
             <div className="group-field">
               Team color
@@ -387,102 +278,7 @@ export function GroupsScreen() {
       )}
       {openPanel === "join" && (
         <GroupModal title="Join a group" onClose={closePanel}>
-          <div className="group-tool-content">
-            <label className="group-field">
-              Group ID
-              <input
-                type="text"
-                value={joinQuery}
-                placeholder="Search by group ID"
-                onChange={(event) => {
-                  setJoinQuery(
-                    event.target.value.replace(/[^a-zA-Z0-9]/g, "")
-                  );
-                  setPasswordGroupId(null);
-                  setJoinPassword("");
-                }}
-              />
-            </label>
-
-            {joinError && <p className="group-error">{joinError}</p>}
-            {searching ? (
-              <p className="group-search-message">Searching...</p>
-            ) : hasSearched && searchResults.length === 0 ? (
-              <p className="group-search-message">
-                Could Not Find Group
-              </p>
-            ) : (
-              <div className="group-search-results">
-                {searchResults.map((group) => (
-                  <div className="group-search-result" key={group.id}>
-                    <div className="group-search-row">
-                      <div className="group-search-name">
-                        <strong>{group.name}</strong>
-                        <span>{group.id}</span>
-                      </div>
-
-                      {group.isMember ? (
-                        <span className="group-membership">
-                          You are already a group member
-                        </span>
-                      ) : (
-                        <button
-                          className="group-button group-join-button"
-                          type="button"
-                          disabled={joiningGroupId === group.id}
-                          onClick={() => {
-                            if (group.isPublic) {
-                              submitJoin(group);
-                            } else {
-                              setJoinError("");
-                              setPasswordGroupId(group.id);
-                              setJoinPassword("");
-                            }
-                          }}
-                        >
-                          {joiningGroupId === group.id
-                            ? "Joining..."
-                            : "Join"}
-                        </button>
-                      )}
-                    </div>
-
-                    {!group.isPublic &&
-                      !group.isMember &&
-                      passwordGroupId === group.id && (
-                        <form
-                          className="group-join-password"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            submitJoin(group, joinPassword);
-                          }}
-                        >
-                          <input
-                            type="password"
-                            value={joinPassword}
-                            placeholder="Password"
-                            onChange={(event) =>
-                              setJoinPassword(event.target.value)
-                            }
-                            autoFocus
-                            required
-                          />
-                          <button
-                            className="group-button group-button-primary"
-                            type="submit"
-                            disabled={joiningGroupId === group.id}
-                          >
-                            {joiningGroupId === group.id
-                              ? "Joining..."
-                              : "Join"}
-                          </button>
-                        </form>
-                      )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <JoinGroupForm onJoined={joined} />
         </GroupModal>
       )}
     </div>
@@ -492,29 +288,16 @@ export function GroupsScreen() {
 const groupsCss = `
   .groups-header {
     display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
-    gap: 16px; max-width: 760px;
+    gap: 16px; max-width: 1480px; margin: 0 auto;
   }
-  .groups-header p { margin: 0; }
-  .groups-grid { max-width: 760px; margin-top: 24px; }
-  .group-panel {
-    padding: 22px;
-    background: #151515;
-    border-radius: 14px;
-  }
-  .group-panel h2 {
-    margin: 0 0 18px;
-    font-size: 1.15rem;
-  }
+  .groups-header h1 { margin: 0; font-size: 2.2rem; font-weight: 800; letter-spacing: -0.5px; }
+  .groups-header p { margin: 4px 0 0; color: #8a8a8a; font-size: 0.95rem; }
+  .groups-grid { max-width: 1480px; margin: 24px auto 0; }
+  .group-panel h2 { margin: 0 0 18px; font-size: 1.15rem; }
   .group-tools { display: flex; gap: 10px; }
   .group-tool-button {
-    padding: 10px 18px;
-    border: none;
-    border-radius: 12px;
-    background: #1c1c1c;
-    color: #f0f0f0;
-    font: inherit;
-    font-weight: 700;
-    cursor: pointer;
+    height: 42px; padding: 0 20px; border: none; border-radius: 21px;
+    background: #1b1b1e; color: #f0f0f0; font: inherit; font-size: 0.9rem; font-weight: 700; cursor: pointer;
   }
   .group-tool-button:hover { background: #262626; }
   .group-tool-primary { background: var(--accent); color: var(--accent-ink); }
@@ -548,58 +331,36 @@ const groupsCss = `
     color: #888;
     text-align: center;
   }
-  .group-list {
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
+  /* The groups as big cards in their team colors. */
+  .group-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .group-card {
+    display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-height: 180px;
+    box-sizing: border-box; padding: 18px 20px; border: none; border-radius: 22px;
+    background: #1b1b1e; color: #f0f0f0; font: inherit; text-align: left; cursor: pointer;
+    transition: transform 0.12s, filter 0.12s;
   }
-  .group-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 11px 14px;
-    border: none;
-    border-radius: 12px;
-    background: #1c1c1c;
-    font-weight: 600;
+  .group-card:hover { filter: brightness(1.06); transform: translateY(-2px); }
+  .group-card-top { display: flex; align-items: center; gap: 6px; margin-bottom: auto; }
+  .group-card-role {
+    padding: 3px 10px; border-radius: 999px; background: rgba(0,0,0,0.18);
+    font-size: 0.72rem; font-weight: 700; letter-spacing: 0.3px;
   }
-  .group-tile-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .group-tile-badge {
-    margin-left: 8px; padding: 2px 8px; border-radius: 999px;
-    background: rgba(127,127,127,0.25); font-size: 0.7rem; font-weight: 700;
-    vertical-align: middle;
+  .group-card-grip { margin-left: auto; opacity: 0.5; font-size: 1.1rem; line-height: 1; cursor: grab; }
+  .group-card:hover .group-card-grip { opacity: 0.9; }
+  .group-card-name { margin-top: 18px; font-size: 1.5rem; font-weight: 800; letter-spacing: -0.3px; line-height: 1.15; overflow-wrap: anywhere; }
+  .group-card-foot {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(127,127,127,0.3);
+    font-size: 0.85rem; font-weight: 600;
   }
-  .group-row-link {
-    width: 100%;
-    color: #f0f0f0;
-    font: inherit;
-    font-weight: 600;
-    text-align: left;
-    cursor: pointer;
-    transition: filter 0.12s;
-  }
-  .group-row-link:hover { filter: brightness(1.08); }
-  .group-tile-id { opacity: 0.7; font-size: 0.82rem; font-weight: 500; }
-  .group-tile-grip { opacity: 0.55; font-size: 1.1rem; line-height: 1; cursor: grab; }
-  .group-row-link:hover .group-tile-grip { opacity: 0.9; }
+  .group-card-live { display: inline-flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .group-card-live span { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #f0432e; box-shadow: 0 0 0 2px rgba(255,255,255,0.7); }
+  .group-card-chevron { font-size: 1.5rem; line-height: 1; opacity: 0.75; }
   /* Where the dragged group will land: a faded copy with a dashed outline,
-     while the browser carries the tile under the pointer. */
-  .group-row-dragging {
-    opacity: 0.35;
-    outline: 2px dashed var(--accent);
-    outline-offset: 3px;
-    transform: scale(0.97);
-  }
+     while the browser carries the card under the pointer. */
+  .group-card-dragging { opacity: 0.35; outline: 2px dashed var(--accent); outline-offset: 3px; transform: scale(0.97); }
   .group-list-dragging, .group-list-dragging * { cursor: grabbing !important; }
-  .group-list-dragging .group-row-link:not(.group-row-dragging) { transition: transform 0.15s; }
-  .group-tile-chevron { font-size: 1.5rem; line-height: 1; opacity: 0.75; }
-  /* A colored tile keeps its buttons readable on any team color by tinting
-     them toward the tile's own text color. */
-  .group-tile .group-button { color: inherit; }
-  .group-tile-light .group-button { background: rgba(0,0,0,0.12); border-color: rgba(0,0,0,0.3); }
-  .group-tile-light .group-button:hover { background: rgba(0,0,0,0.22); }
-  .group-tile-dark .group-button { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.35); }
-  .group-tile-dark .group-button:hover { background: rgba(255,255,255,0.24); }
+  .group-list-dragging .group-card:not(.group-card-dragging) { transition: transform 0.15s; }
   .group-error {
     margin: 0 0 14px;
     padding: 9px 11px;
@@ -619,8 +380,7 @@ const groupsCss = `
     font-weight: 600;
   }
   .group-field input[type="text"],
-  .group-field input[type="password"],
-  .group-join-password input {
+  .group-field input[type="password"] {
     box-sizing: border-box;
     width: 100%;
     padding: 10px 11px;
@@ -640,115 +400,6 @@ const groupsCss = `
     color: #666;
     cursor: not-allowed;
     opacity: 0.7;
-  }
-  .group-privacy-row {
-    display: grid;
-    grid-template-columns: 112px minmax(0, 1fr);
-    gap: 14px;
-    align-items: end;
-  }
-  .group-visibility {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 38px;
-    margin-bottom: 15px;
-    color: #ddd;
-    font-size: 0.85rem;
-    font-weight: 600;
-    cursor: pointer;
-  }
-  .group-visibility input {
-    position: absolute;
-    opacity: 0;
-  }
-  .group-switch {
-    position: relative;
-    width: 36px;
-    height: 20px;
-    border-radius: 10px;
-    background: #555;
-  }
-  .group-switch::after {
-    content: "";
-    position: absolute;
-    top: 3px;
-    left: 3px;
-    width: 14px;
-    height: 14px;
-    border-radius: 50%;
-    background: #eee;
-    transition: left 0.15s;
-  }
-  .group-visibility input:checked + .group-switch {
-    background: var(--accent);
-  }
-  .group-visibility input:checked + .group-switch::after {
-    left: 19px;
-    background: var(--accent-ink);
-  }
-  .group-password {
-    min-width: 0;
-  }
-  .group-search-message {
-    margin: 4px 0 0;
-    padding: 18px 10px;
-    border: 1px dashed #3a3a3a;
-    border-radius: 7px;
-    color: #888;
-    text-align: center;
-  }
-  .group-search-results {
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
-  }
-  .group-search-result {
-    padding: 11px;
-    border: 1px solid #303030;
-    border-radius: 8px;
-    background: #242424;
-  }
-  .group-search-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  .group-search-name {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .group-search-name strong,
-  .group-search-name span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .group-search-name span {
-    color: #999;
-    font-size: 0.8rem;
-  }
-  .group-membership {
-    max-width: 145px;
-    color: #999;
-    font-size: 0.78rem;
-    line-height: 1.3;
-    text-align: right;
-  }
-  .group-join-button {
-    flex: 0 0 auto;
-  }
-  .group-join-password {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 9px;
-    margin-top: 10px;
-  }
-  .group-join-password input:focus {
-    border-color: var(--accent);
   }
   .group-actions {
     display: flex;

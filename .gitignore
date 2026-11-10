@@ -42,3 +42,5 @@ deploy/backups/
 
 # Claude Code personal settings
 .claude/settings.local.json
+
+deploy/cloudfront-private-key.pem
