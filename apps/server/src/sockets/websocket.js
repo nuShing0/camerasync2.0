@@ -143,13 +143,6 @@ async function isSessionHost(socket, sessionId) {
 
 export async function initSocket(httpServer) {
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS socket_io (
-      id BIGSERIAL UNIQUE PRIMARY KEY,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      payload BYTEA
-    )
-  `);
-  await pool.query(`
     CREATE TABLE IF NOT EXISTS socket_io_attachments (
       id BIGSERIAL UNIQUE PRIMARY KEY,
       created_at TIMESTAMPTZ DEFAULT NOW(),
