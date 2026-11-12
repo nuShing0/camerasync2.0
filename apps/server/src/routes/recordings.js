@@ -5,6 +5,7 @@
 // (see ../index.js).
 
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import archiver from "archiver";
 import { Router } from "express";
@@ -27,6 +28,7 @@ import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { ensureRecordingNumber, isRecordingDeleted } from "../recordings/numbering.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { STAGES, progressFor, reportProgress } from "../recordings/uploadProgress.js";
+import { EXPORT_KINDS, ensureExports, openExport } from "../recordings/syncedExports.js";
 
 export const recordingsRouter = Router();
 const SESSION_ID_CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -379,40 +381,67 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
 // USB stick: a folder per recording ("Recording 001") with each member's
 // angle named after them. Stored, not compressed: video is already
 // compressed, so the zip starts streaming at once and costs no CPU.
+//
+// ?kind= picks what's in it:
+//   (none)  the original files, as each phone recorded them: not lined up
+//   synced  every angle cut to start and end together, like the player
+//   grid    one video per recording with every angle side by side
+// synced and grid are made in the background first (POST .../exports, see
+// ../recordings/syncedExports.js); until they're ready this answers 409.
+// With ?startedAt= only that recording is included, and a grid of one
+// recording comes as the MP4 itself rather than a zip.
 recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, next) => {
-  let archive;
-  try {
-    const { rows: sessions } = await pool.query(
-      `SELECT rs.id, rs.name, rs.scheduled_at FROM recording_sessions rs
-       WHERE rs.id = $1 AND ${sessionVisibleSql("rs", "$2")}`,
-      [req.params.id, req.user.id]
-    );
-    if (sessions.length === 0) {
-      return res.status(404).json({ error: "Session not found." });
+  const kind = req.query.kind ?? "original";
+  if (kind !== "original" && !EXPORT_KINDS.has(kind)) {
+    return res.status(400).json({ error: "Unknown download kind." });
+  }
+  let startedAt = null;
+  if (req.query.startedAt !== undefined) {
+    startedAt = Number(req.query.startedAt);
+    if (!Number.isSafeInteger(startedAt) || startedAt <= 0) {
+      return res.status(400).json({ error: "Invalid recording." });
     }
-    const { rows: videos } = await pool.query(
-      `SELECT v.file_id, v.started_at_ms, u.display_name, sr.recording_number
-         FROM recording_session_videos v
-         JOIN users u ON u.user_id = v.user_id
-         LEFT JOIN session_recordings sr
-           ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
-        WHERE v.session_id = $1 AND v.file_id IS NOT NULL
-        ORDER BY v.started_at_ms, u.display_name`,
-      [req.params.id]
-    );
-    if (videos.length === 0) {
+  }
+  const opened = [];
+  let archive;
+  let sending = false;
+  try {
+    const session = await visibleSession(req.params.id, req.user.id);
+    if (!session) return res.status(404).json({ error: "Session not found." });
+    const takes = await sessionTakes(req.params.id, startedAt);
+    if (takes.length === 0) {
       return res.status(404).json({ error: "No videos have been uploaded for this session." });
     }
 
-    const session = sessions[0];
-    const day = new Date(session.scheduled_at).toISOString().slice(0, 10);
-    const zipName = `${safeName(session.name) || "Session"} ${day}.zip`;
-    res.set({
-      "Content-Type": "application/zip",
-      "Content-Disposition":
-        `attachment; filename="${zipName.replace(/"/g, "")}"; filename*=UTF-8''${encodeURIComponent(zipName)}`,
-    });
+    // Each recording's finished export, or 409 with how far along it is.
+    if (kind !== "original") {
+      for (const take of takes) {
+        const ready = await openExport(kind, take);
+        if (!ready) break;
+        opened.push(ready);
+      }
+      if (opened.length < takes.length) {
+        const status = await ensureExports(kind, takes);
+        return res.status(409).json({ error: "This download is still being made.", status });
+      }
+    }
 
+    const day = new Date(session.scheduled_at).toISOString().slice(0, 10);
+    const base = `${safeName(session.name) || "Session"} ${day}`;
+    const takeFolder = (take) => `Recording ${String(take.number).padStart(3, "0")}`;
+
+    // A single recording's grid: just the video.
+    if (kind === "grid" && startedAt !== null) {
+      res.set(attachment(`${base} ${takeFolder(takes[0])} grid.mp4`, "video/mp4"));
+      sending = true;
+      return res.sendFile(opened[0].path(opened[0].file), (err) => {
+        opened[0].release();
+        if (err && !res.headersSent) next(err);
+      });
+    }
+
+    const suffix = kind === "original" ? "" : ` ${kind}`;
+    res.set(attachment(`${base}${suffix}.zip`, "application/zip"));
     archive = archiver("zip", { store: true });
     archive.on("warning", () => {});
     archive.on("error", (err) => {
@@ -426,22 +455,35 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
     archive.pipe(res);
 
     // One file at a time, so a long session doesn't open every video at once.
-    const takes = new Map();
-    const used = new Set();
-    for (const video of videos) {
-      const startedAt = Number(video.started_at_ms);
-      if (!takes.has(startedAt)) takes.set(startedAt, video.recording_number ?? takes.size + 1);
-      const folder = `Recording ${String(takes.get(startedAt)).padStart(3, "0")}`;
-      let name = `${folder}/${safeName(video.display_name) || "Member"}${path.extname(video.file_id)}`;
-      for (let n = 2; used.has(name); n += 1) {
-        name = `${folder}/${safeName(video.display_name) || "Member"} (${n})${path.extname(video.file_id)}`;
-      }
-      used.add(name);
-
-      const stream = await storage.open(video.file_id);
+    const add = async (stream, name, date) => {
       const added = new Promise((resolve) => archive.once("entry", resolve));
-      archive.append(stream, { name, date: new Date(startedAt) });
+      archive.append(stream, { name, date });
       await added;
+    };
+    for (const [t, take] of takes.entries()) {
+      const folder = takeFolder(take);
+      const date = new Date(take.startedAt);
+      if (kind === "grid") {
+        const ready = opened[t];
+        await add(fs.createReadStream(ready.path(ready.file)), `${folder} grid.mp4`, date);
+        continue;
+      }
+      const used = new Set();
+      for (const [a, angle] of take.angles.entries()) {
+        const ext = kind === "synced" ? ".mp4" : path.extname(angle.fileId);
+        let name = `${folder}/${safeName(angle.name) || "Member"}${ext}`;
+        for (let n = 2; used.has(name); n += 1) {
+          name = `${folder}/${safeName(angle.name) || "Member"} (${n})${ext}`;
+        }
+        used.add(name);
+        const stream = kind === "synced"
+          ? fs.createReadStream(opened[t].path(opened[t].angles[a].file))
+          : await storage.open(angle.fileId);
+        await add(stream, name, date);
+      }
+    }
+    if (kind !== "original") {
+      archive.append(exportReadme(kind, takes, opened), { name: "About these videos.txt" });
     }
     await archive.finalize();
   } catch (err) {
@@ -450,8 +492,129 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
       if (res.headersSent) return res.destroy(err);
     }
     next(err);
+  } finally {
+    if (!sending) for (const ready of opened) ready.release();
   }
 });
+
+// Asks for a synced or grid download of the session (or, with startedAt, one
+// recording) to be made, and says how far along it is. Safe to repeat: the
+// apps call it every couple of seconds until it's "ready", then fetch the
+// download. Body: { kind: "synced" | "grid", startedAt? }.
+recordingsRouter.post("/sessions/:id/exports", requireAuth, async (req, res, next) => {
+  const kind = req.body?.kind;
+  const startedAt = req.body?.startedAt ?? null;
+  if (!EXPORT_KINDS.has(kind) ||
+      (startedAt !== null && (!Number.isSafeInteger(startedAt) || startedAt <= 0))) {
+    return res.status(400).json({ error: "Invalid download request." });
+  }
+  try {
+    if (!(await visibleSession(req.params.id, req.user.id))) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    const takes = await sessionTakes(req.params.id, startedAt);
+    if (takes.length === 0) {
+      return res.status(404).json({ error: "No videos have been uploaded for this session." });
+    }
+    res.json(await ensureExports(kind, takes));
+  } catch (err) {
+    next(err);
+  }
+});
+
+async function visibleSession(sessionId, userId) {
+  const { rows } = await pool.query(
+    `SELECT rs.id, rs.name, rs.scheduled_at FROM recording_sessions rs
+     WHERE rs.id = $1 AND ${sessionVisibleSql("rs", "$2")}`,
+    [sessionId, userId]
+  );
+  return rows[0] ?? null;
+}
+
+// The session's recordings with their uploaded angles (in name order) and
+// each angle's start offset: the stored one the player lines it up by.
+async function sessionTakes(sessionId, startedAt = null) {
+  const { rows } = await pool.query(
+    `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id,
+            v.start_offset_ms, v.start_offset_source,
+            u.display_name, sr.recording_number
+       FROM recording_session_videos v
+       JOIN users u ON u.user_id = v.user_id
+       LEFT JOIN session_recordings sr
+         ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
+      WHERE v.session_id = $1 AND v.file_id IS NOT NULL
+        AND ($2::bigint IS NULL OR v.started_at_ms = $2)
+      ORDER BY v.started_at_ms, u.display_name, v.user_id`,
+    [sessionId, startedAt]
+  );
+  const takes = [];
+  for (const row of rows) {
+    const at = Number(row.started_at_ms);
+    let take = takes[takes.length - 1];
+    if (!take || take.startedAt !== at) {
+      take = {
+        sessionId,
+        startedAt: at,
+        number: row.recording_number == null ? takes.length + 1 : Number(row.recording_number),
+        angles: [],
+      };
+      takes.push(take);
+    }
+    const startOffsetMs = row.start_offset_ms == null ? null : Number(row.start_offset_ms);
+    take.angles.push({
+      userId: Number(row.user_id),
+      name: row.display_name || "Member",
+      fileId: row.file_id,
+      // A server preview, or the phone's; both keep the original's timeline.
+      previewFileId: row.preview_file_id && row.preview_file_id !== row.file_id
+        ? row.preview_file_id : null,
+      startOffsetMs,
+      // What the offset was measured from, for the note in the zip.
+      syncedBy: startOffsetMs == null ? null : row.start_offset_source ?? "call",
+    });
+  }
+  return takes;
+}
+
+function attachment(name, contentType) {
+  return {
+    "Content-Type": contentType,
+    "Content-Disposition":
+      `attachment; filename="${name.replace(/"/g, "")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+  };
+}
+
+// start_offset_source: the camera's first frame, the time the phone was
+// told to start (older apps), or the sync beep (older takes).
+const SYNCED_BY = {
+  frame: "first frame",
+  call: "phone's clock",
+  beep: "sync beep",
+};
+
+// A note in a synced or grid zip: how each angle was lined up.
+function exportReadme(kind, takes, opened) {
+  const lines = [
+    kind === "synced"
+      ? "Every video in a recording's folder starts at the same moment and runs the same length,"
+      : "Each video shows every angle of a recording side by side,",
+    "lined up the same way as the 8Kount player. For the untouched originals, use \"Original files\".",
+    "",
+  ];
+  for (const [t, take] of takes.entries()) {
+    lines.push(`Recording ${String(take.number).padStart(3, "0")} (${formatSeconds(opened[t].length)})`);
+    for (const angle of opened[t].angles) {
+      const how = SYNCED_BY[angle.syncedBy] ?? "not measured, kept as recorded";
+      lines.push(`  ${angle.name}: ${angle.skip.toFixed(3)} s trimmed from the start (${how})`);
+    }
+  }
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function formatSeconds(seconds) {
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
 
 // Letters, numbers, spaces and a little punctuation, for names inside a zip.
 function safeName(value) {

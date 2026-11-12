@@ -438,6 +438,29 @@ class RecordingsApi {
     await _api.delete('/api/recordings/sessions/$id/recordings/$startedAtMs');
   }
 
+  /// Asks the server to make a synced or grid download ([kind] 'synced' or
+  /// 'grid') of one recording, or the whole session when [startedAtMs] is
+  /// null, and says how far along it is. Safe to repeat: ask every couple of
+  /// seconds until it's ready, then fetch [downloadPath].
+  Future<ExportStatus> requestExport(
+      String id, String kind, int? startedAtMs) async {
+    final data = await _api.post('/api/recordings/sessions/$id/exports', {
+      'kind': kind,
+      if (startedAtMs != null) 'startedAt': startedAtMs,
+    });
+    return ExportStatus.fromJson(Map<String, dynamic>.from(data as Map));
+  }
+
+  /// Where a session's download is, server-relative: [kind] 'original' (each
+  /// phone's file as recorded), 'synced' or 'grid'.
+  static String downloadPath(String id, String kind, int? startedAtMs) {
+    final query = [
+      if (kind != 'original') 'kind=$kind',
+      if (startedAtMs != null) 'startedAt=$startedAtMs',
+    ].join('&');
+    return '/api/recordings/sessions/$id/download${query.isEmpty ? '' : '?$query'}';
+  }
+
   Future<void> deleteSessionNote(String id, int noteId) async {
     await _api.delete('/api/recordings/sessions/$id/notes/$noteId');
   }
@@ -593,4 +616,55 @@ class RecordingsApi {
         'stage': stage,
         'fraction': fraction,
       });
+}
+
+/// How far along the server is with a synced or grid download.
+class ExportStatus {
+  const ExportStatus({
+    required this.state,
+    required this.progress,
+    required this.ready,
+    required this.total,
+    required this.waiting,
+    this.error,
+  });
+
+  /// 'queued', 'working', 'ready' or 'failed'.
+  final String state;
+
+  /// 0 to 1.
+  final double progress;
+
+  /// Recordings done, of [total].
+  final int ready;
+  final int total;
+
+  /// Other downloads the server is making first.
+  final int waiting;
+  final String? error;
+
+  bool get isReady => state == 'ready';
+  bool get isFailed => state == 'failed';
+
+  factory ExportStatus.fromJson(Map<String, dynamic> json) => ExportStatus(
+        state: json['state'] as String? ?? 'queued',
+        progress: (json['progress'] as num?)?.toDouble() ?? 0,
+        ready: (json['ready'] as num?)?.toInt() ?? 0,
+        total: (json['total'] as num?)?.toInt() ?? 1,
+        waiting: (json['waiting'] as num?)?.toInt() ?? 0,
+        error: json['error'] as String?,
+      );
+
+  /// What to show while it's made. Mirrors downloadStatusText on the web.
+  String describe(String kind) {
+    if (isFailed) return error ?? "Couldn't make the download.";
+    if (isReady) return 'Ready. Downloading…';
+    if (state == 'queued' && waiting > 0) {
+      return 'Waiting for $waiting other download${waiting == 1 ? '' : 's'} to finish…';
+    }
+    final making =
+        kind == 'grid' ? 'Building the grid' : 'Lining up the angles';
+    final of = total > 1 ? ' ($ready of $total recordings done)' : '';
+    return '$making… ${(progress * 100).floor()}%$of';
+  }
 }

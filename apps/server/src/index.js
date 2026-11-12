@@ -13,6 +13,7 @@ import { startThumbnailBackfill } from "./recordings/thumbnails.js";
 import { startScrubBackfill } from "./recordings/scrubFrames.js";
 import { startUnfinishedUploadSweep } from "./routes/file.js";
 import { startRetiredFileSweep } from "./recordings/retiredFiles.js";
+import { startExportSweep } from "./recordings/syncedExports.js";
 import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
 import { recordingsRouter } from './routes/recordings.js';
@@ -52,6 +53,7 @@ startIdleSessionChecks();
 startPreviewBackfill();
 startThumbnailBackfill();
 startScrubBackfill();
+startExportSweep();
 startUnfinishedUploadSweep();
 startRetiredFileSweep();
 
