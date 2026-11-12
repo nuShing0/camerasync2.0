@@ -8,7 +8,7 @@ import 'package:flutter/services.dart';
 ///
 /// The time the app noted when it asked the camera to start can be up to a
 /// second early (camera warm-up). This one is when recording really began,
-/// so angles can be lined up by time, without needing to hear a beep.
+/// so angles can be lined up by time.
 const _channel = MethodChannel('app.eightkount/first_frame');
 
 /// Asks for it until it's known (a moment after recording starts), for up to

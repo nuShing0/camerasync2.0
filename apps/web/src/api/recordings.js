@@ -28,12 +28,6 @@ async function request(path, options = {}) {
   return data;
 }
 
-// counts the signed-in user's uploaded videos
-export async function getMyVideoCount() {
-  const data = await request("/api/recordings/my-video-count");
-  return data.count;
-}
-
 // loads sessions visible to the current user
 export async function getSessions() {
   const data = await request("/api/recordings/sessions");

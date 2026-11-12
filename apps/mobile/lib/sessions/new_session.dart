@@ -60,8 +60,7 @@ Future<void> joinAndOpen(
 }
 
 /// What the + offers, nearest the button first. The nav bar grows into a
-/// panel of these (see home_shell.dart); [showNewSessionMenu] lists them in
-/// a sheet.
+/// panel of these (see home_shell.dart).
 const newSessionChoices = [
   (
     value: 'start',
@@ -82,48 +81,6 @@ const newSessionChoices = [
     detail: 'Enter the 6-character code someone shared.',
   ),
 ];
-
-/// The + menu as a sheet. Returns true when a session was started or
-/// scheduled, so the session lists can refresh.
-Future<bool> showNewSessionMenu(BuildContext context, AuthService auth) async {
-  final team = TeamAccent.of(context);
-  final choice = await showModalBottomSheet<String>(
-    context: context,
-    backgroundColor: kSurface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-    ),
-    builder: (context) {
-      Widget option(String value, IconData icon, String title, String detail) =>
-          ListTile(
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-            leading: Icon(icon, color: team.accent, size: 28),
-            title: Text(title,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700)),
-            subtitle: Text(detail, style: const TextStyle(color: kMuted)),
-            onTap: () => Navigator.of(context).pop(value),
-          );
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final c in newSessionChoices)
-                option(c.value, c.icon, c.title, c.detail),
-            ],
-          ),
-        ),
-      );
-    },
-  );
-  if (choice == null || !context.mounted) return false;
-  return runNewSessionChoice(context, auth, choice);
-}
 
 /// Carries out one of [newSessionChoices]. True when a session was started
 /// or scheduled.

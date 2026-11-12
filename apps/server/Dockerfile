@@ -2,8 +2,8 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# ffmpeg reads the audio of uploaded videos to find the sync beep that
-# lines a take's angles up (src/recordings/syncBeep.js).
+# ffmpeg readies uploaded videos for streaming and makes their previews,
+# thumbnails and scrub frames (src/recordings/).
 RUN apk add --no-cache ffmpeg
 
 COPY package.json package-lock.json ./

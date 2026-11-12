@@ -86,7 +86,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>8kount uses the camera to record your team's practice from this angle.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>8kount records sound with the video, and listens for the sync beep that lines up every angle.</string>
+	<string>8kount records sound with the video.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

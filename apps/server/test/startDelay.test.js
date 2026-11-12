@@ -7,7 +7,7 @@ import {
   MIN_START_DELAY_MS,
   MIN_STOP_DELAY_MS,
   startDelayMs,
-  stopSchedule,
+  stopAt,
   trackRoundTrips,
 } from "../src/sockets/startDelay.js";
 
@@ -65,32 +65,25 @@ describe("trackRoundTrips", () => {
   });
 });
 
-describe("stopSchedule", () => {
+describe("stopAt", () => {
   const START = 1_000_000;
 
   it("cancels a take that hasn't reached its start", () => {
-    expect(stopSchedule([50], START, START - 400)).toEqual({
-      stopAtEpochMs: START - 400,
-      endBeepAtEpochMs: null,
-    });
+    expect(stopAt([50], START, START - 400)).toBe(START - 400);
   });
 
   it("stops once the slowest device has the stop, with no tail after it", () => {
     const now = START + 30_000;
-    const { endBeepAtEpochMs, stopAtEpochMs } = stopSchedule([40, 900], START, now);
-    expect(stopAtEpochMs).toBe(now + 1200);
-    // Still sent for older apps, at the stop itself.
-    expect(endBeepAtEpochMs).toBe(stopAtEpochMs);
+    expect(stopAt([40, 900], START, now)).toBe(now + 1200);
   });
 
   it("waits at least the minimum, and at most the start delay's cap", () => {
     const now = START + 30_000;
-    expect(stopSchedule([], START, now).stopAtEpochMs).toBe(now + MIN_STOP_DELAY_MS);
-    expect(stopSchedule([60_000], START, now).stopAtEpochMs).toBe(now + MAX_START_DELAY_MS);
+    expect(stopAt([], START, now)).toBe(now + MIN_STOP_DELAY_MS);
+    expect(stopAt([60_000], START, now)).toBe(now + MAX_START_DELAY_MS);
   });
 
   it("doesn't stretch a very short take", () => {
-    const { stopAtEpochMs } = stopSchedule([], START, START + 100);
-    expect(stopAtEpochMs).toBe(START + 100 + MIN_STOP_DELAY_MS);
+    expect(stopAt([], START, START + 100)).toBe(START + 100 + MIN_STOP_DELAY_MS);
   });
 });

@@ -78,6 +78,9 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:${camerax_version}")
     implementation("androidx.camera:camera-video:${camerax_version}")
     implementation("com.google.guava:guava:33.5.0-android")
+    // CameraX's own classes refer to this, but it doesn't put it on the
+    // compile path; another plugin (audioplayers) used to bring it along.
+    implementation("androidx.concurrent:concurrent-futures:1.1.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.mockito:mockito-core:5.21.0")
     testImplementation("org.mockito:mockito-inline:5.2.0")

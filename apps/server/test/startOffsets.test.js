@@ -98,7 +98,7 @@ describe("saving a video's real start", () => {
     expect((await save({ startedAt, actualStartedAt: startedAt + 870 })).status).toBe(200);
 
     const take = (await videosOf()).find((r) => r.startedAt === startedAt);
-    expect(take.videos[0]).toMatchObject({ startOffsetMs: 870, syncedBy: "device" });
+    expect(take.videos[0].startOffsetMs).toBe(870);
   });
 
   it("keeps the first offset when the save is retried", async () => {
@@ -110,40 +110,6 @@ describe("saving a video's real start", () => {
     expect(take.videos[0].startOffsetMs).toBe(400);
   });
 
-  it("prefers where the sync beep landed over the reported time", async () => {
-    const startedAt = Date.now() - 5_000;
-    await save({ startedAt, actualStartedAt: startedAt + 100 });
-    // The upload route stores this from the audio; set it directly here.
-    await pool.query(
-      `UPDATE recording_session_videos SET beep_at_ms = 700
-        WHERE session_id = $1 AND started_at_ms = $2`,
-      [sessionId, startedAt]
-    );
-
-    const take = (await videosOf()).find((r) => r.startedAt === startedAt);
-    expect(take.videos[0]).toMatchObject({ startOffsetMs: 800, syncedBy: "beep" });
-  });
-
-  it("falls back to the end beep for a camera that missed the start beep", async () => {
-    const startedAt = Date.now() - 3_000;
-    await save({ startedAt, actualStartedAt: startedAt + 100 });
-    // The end beep played 20 s into the take and landed 18.3 s into this
-    // video: the camera started 1.7 s late.
-    await pool.query(
-      `UPDATE session_recordings SET end_beep_epoch_ms = $3
-        WHERE session_id = $1 AND started_at_ms = $2`,
-      [sessionId, startedAt, startedAt + 20_000]
-    );
-    await pool.query(
-      `UPDATE recording_session_videos SET end_beep_at_ms = 18300
-        WHERE session_id = $1 AND started_at_ms = $2`,
-      [sessionId, startedAt]
-    );
-
-    const take = (await videosOf()).find((r) => r.startedAt === startedAt);
-    expect(take.videos[0]).toMatchObject({ startOffsetMs: 1700, syncedBy: "beep" });
-  });
-
   it("takes a first-frame time over a rougher one, and keeps it", async () => {
     const startedAt = Date.now() - 2_000;
     await save({ startedAt, actualStartedAt: startedAt + 100, startClock: "call" });
@@ -152,42 +118,7 @@ describe("saving a video's real start", () => {
     await save({ startedAt, actualStartedAt: startedAt + 90, startClock: "call" });
 
     const take = (await videosOf()).find((r) => r.startedAt === startedAt);
-    expect(take.videos[0]).toMatchObject({
-      startOffsetMs: 640,
-      syncedBy: "clock",
-      clockStartOffsetMs: 640,
-    });
-  });
-
-  it("lines angles up by the first frame over the beep, which it agrees with", async () => {
-    const startedAt = Date.now() - 1_500;
-    await save({ startedAt, actualStartedAt: startedAt + 230, startClock: "frame" });
-    await pool.query(
-      `UPDATE recording_session_videos SET beep_at_ms = 1500
-        WHERE session_id = $1 AND started_at_ms = $2`,
-      [sessionId, startedAt]
-    );
-
-    const take = (await videosOf()).find((r) => r.startedAt === startedAt);
-    expect(take.videos[0]).toMatchObject({
-      startOffsetMs: 230,
-      syncedBy: "clock",
-      clockStartOffsetMs: 230,
-      beepStartOffsetMs: 0,
-    });
-  });
-
-  it("trusts the beep when the first frame is far off it (a clock jumped)", async () => {
-    const startedAt = Date.now() - 1_000;
-    await save({ startedAt, actualStartedAt: startedAt + 2_400, startClock: "frame" });
-    await pool.query(
-      `UPDATE recording_session_videos SET beep_at_ms = 1400
-        WHERE session_id = $1 AND started_at_ms = $2`,
-      [sessionId, startedAt]
-    );
-
-    const take = (await videosOf()).find((r) => r.startedAt === startedAt);
-    expect(take.videos[0]).toMatchObject({ startOffsetMs: 100, syncedBy: "beep" });
+    expect(take.videos[0].startOffsetMs).toBe(640);
   });
 
   it("is null for clients that don't report it", async () => {

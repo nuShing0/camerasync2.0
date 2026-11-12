@@ -54,15 +54,10 @@ class RecordingStartCommand {
     required this.serverStartAtEpochMs,
     required this.localStartAtEpochMs,
     this.recordingNumber,
-    this.localBeepAtEpochMs,
   });
 
   final int serverStartAtEpochMs;
   final int localStartAtEpochMs;
-
-  /// When the device that started the take plays the sync beep, on this
-  /// device's clock. Null from servers that predate the beep.
-  final int? localBeepAtEpochMs;
 
   /// 1-based position of this recording within the session ("Recording 3"),
   /// as persisted by the server. Null for start commands that predate it.
@@ -70,21 +65,17 @@ class RecordingStartCommand {
 }
 
 /// A stop command. Cameras keep rolling until [localStopAtEpochMs] (this
-/// device's clock), so every one of them records the end beep, which the
-/// device that pressed Stop plays at [localEndBeepAtEpochMs]. Both are null
-/// from servers that stop at once, and the end beep is null for a take
-/// cancelled before its start.
+/// device's clock), when every device has had the command. Null from servers
+/// that stop at once. A stop before the take's start cancels it.
 class RecordingStopCommand {
   const RecordingStopCommand({
     this.serverStartAtEpochMs,
     this.localStopAtEpochMs,
-    this.localEndBeepAtEpochMs,
   });
 
   /// The take being stopped, when the server said.
   final int? serverStartAtEpochMs;
   final int? localStopAtEpochMs;
-  final int? localEndBeepAtEpochMs;
 }
 
 /// Result of the `session:join` ack.
@@ -135,7 +126,6 @@ class SyncSocket {
   int _clockOffsetMs = 0;
   bool _clockSynced = false;
 
-  int get clockOffsetMs => _clockOffsetMs;
   bool get clockSynced => _clockSynced;
 
   final _members = StreamController<List<SessionMember>>.broadcast();
@@ -249,7 +239,6 @@ class SyncSocket {
         _recordingStart.add(_startCommand(
           serverStart,
           recordingNumber: (data['recordingNumber'] as num?)?.toInt(),
-          serverBeepAtEpochMs: (data['beepAtEpochMs'] as num?)?.toInt(),
         ));
       }
     });
@@ -258,12 +247,9 @@ class SyncSocket {
       int? field(String key) =>
           data is Map ? (data[key] as num?)?.toInt() : null;
       final stopAt = field('stopAtEpochMs');
-      final endBeepAt = field('endBeepAtEpochMs');
       _recordingStop.add(RecordingStopCommand(
         serverStartAtEpochMs: field('startAtEpochMs'),
         localStopAtEpochMs: stopAt == null ? null : serverToLocal(stopAt),
-        localEndBeepAtEpochMs:
-            endBeepAt == null ? null : serverToLocal(endBeepAt),
       ));
     });
 
@@ -351,15 +337,11 @@ class SyncSocket {
   RecordingStartCommand _startCommand(
     int serverStartAtEpochMs, {
     int? recordingNumber,
-    int? serverBeepAtEpochMs,
   }) =>
       RecordingStartCommand(
         serverStartAtEpochMs: serverStartAtEpochMs,
         localStartAtEpochMs: serverToLocal(serverStartAtEpochMs),
         recordingNumber: recordingNumber,
-        localBeepAtEpochMs: serverBeepAtEpochMs == null
-            ? null
-            : serverToLocal(serverBeepAtEpochMs),
       );
 
   /// Joins the session's socket room. The server requires an ack callback and

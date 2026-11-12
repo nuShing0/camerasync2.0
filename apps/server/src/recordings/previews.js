@@ -7,7 +7,7 @@
 // what plays full screen and what downloads.
 //
 // The preview keeps the original's timeline (same start, same moments), so
-// the sync beep and start offsets measured in the original line it up too.
+// the start offsets measured in the original line it up too.
 //
 // Made in the background, one at a time and at low priority, after the
 // upload has answered. Videos uploaded before previews existed are worked

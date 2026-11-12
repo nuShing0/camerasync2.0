@@ -122,7 +122,7 @@ describe("preview first", () => {
     expect(early.previewOnly).toBe(true);
     expect(early.url).toBe(early.previewUrl);
     // Lined up already, from the first-frame time sent with the preview.
-    expect(early).toMatchObject({ startOffsetMs: 120, syncedBy: "clock" });
+    expect(early.startOffsetMs).toBe(120);
 
     const fullRes = await upload(full, startedAt);
     expect(fullRes.status).toBe(201);
