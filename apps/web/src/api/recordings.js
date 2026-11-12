@@ -110,32 +110,21 @@ export async function getSessionVideos(id) {
   return data;
 }
 
-// The session (or, with startedAt, one recording) as a download, for keeping
-// on a computer or USB stick. A plain link: the browser downloads it with
-// the login cookie. `kind`:
-//   "original"  a zip of each phone's file as recorded (not lined up)
-//   "synced"    a zip of every angle trimmed to start and end together
-//   "grid"      every angle side by side in one video (an MP4 for one
-//               recording, a zip of them for the session)
-// synced and grid have to be made first: see requestExport.
-export function sessionDownloadUrl(id, { kind = "original", startedAt = null } = {}) {
-  const query = new URLSearchParams();
-  if (kind !== "original") query.set("kind", kind);
-  if (startedAt != null) query.set("startedAt", String(startedAt));
-  const search = query.toString();
-  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download` +
-    (search ? `?${search}` : "");
+// The whole session as one zip to keep on a computer or USB stick: a folder
+// per recording with every angle trimmed to start and end together (like
+// the player) and a video of all the angles side by side. A plain link: the
+// browser downloads it with the login cookie. It has to be made first: see
+// requestSyncedDownload.
+export function sessionDownloadUrl(id) {
+  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download?kind=synced`;
 }
 
-// Asks the server to make a synced or grid download, and how far along it
-// is: { state: "queued" | "working" | "ready" | "failed", progress (0-1),
-// ready, total (recordings), waiting (other downloads ahead), error }. Safe
-// to repeat; ask every few seconds until it's ready.
-export async function requestExport(id, kind, startedAt = null) {
-  return request(`/api/recordings/sessions/${encodeURIComponent(id)}/exports`, {
-    method: "POST",
-    body: JSON.stringify(startedAt == null ? { kind } : { kind, startedAt }),
-  });
+// Asks the server to make the session's download, and how far along it is:
+// { state: "queued" | "working" | "ready" | "failed", progress (0-1),
+// waiting (other people's downloads ahead), error }. Safe to repeat; ask
+// every few seconds until it's ready.
+export async function requestSyncedDownload(id) {
+  return request(`/api/recordings/sessions/${encodeURIComponent(id)}/exports`, { method: "POST" });
 }
 
 // `signal` stops it part way (a take starting): it then rejects with an

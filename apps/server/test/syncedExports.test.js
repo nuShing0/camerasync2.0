@@ -11,8 +11,8 @@ process.env.EXPORT_DIR = EXPORT_DIR;
 vi.mock("../src/db/pool.js", () => ({ pool: { query: vi.fn() } }));
 
 const {
-  canCopy, exportKey, gridArgs, gridLayout, openExport, purgeExportsUsing,
-  sweepExports, syncWindow, syncedAngleArgs,
+  MAX_PER_GRID, canCopy, exportKey, gridArgs, gridGroups, gridLayout, openExport,
+  purgeExportsUsing, sweepExports, syncWindow, syncedAngleArgs,
 } = await import("../src/recordings/syncedExports.js");
 
 afterAll(() => fs.rmSync(EXPORT_DIR, { recursive: true, force: true }));
@@ -144,6 +144,24 @@ describe("gridArgs", () => {
   it("handles a single angle without xstack", () => {
     const { args } = gridArgs(["a.mp4"], "grid.mp4", { ...window, skips: [0] });
     expect(args[args.indexOf("-filter_complex") + 1]).not.toContain("xstack");
+  });
+});
+
+describe("gridGroups", () => {
+  it("keeps a take that fits in one grid video", () => {
+    expect(gridGroups(4)).toEqual([[0, 1, 2, 3]]);
+    expect(gridGroups(MAX_PER_GRID)).toHaveLength(1);
+  });
+
+  it("splits a big take evenly across as few videos as fit", () => {
+    // 20 angles at up to 6 a video: 4 videos of 5.
+    expect(gridGroups(20).map((group) => group.length)).toEqual([5, 5, 5, 5]);
+    expect(gridGroups(7).map((group) => group.length)).toEqual([4, 3]);
+    expect(gridGroups(13).map((group) => group.length)).toEqual([5, 4, 4]);
+  });
+
+  it("keeps every angle once, in order", () => {
+    expect(gridGroups(20).flat()).toEqual([...Array(20).keys()]);
   });
 });
 

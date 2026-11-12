@@ -9,8 +9,9 @@
 //   synced  every angle cut to start at the same instant (when the last
 //           camera began) and end together (when the first one stopped),
 //           at full quality: one MP4 per angle.
-//   grid    one MP4 with every angle side by side, cut the same way, built
-//           from the 720p previews (see previews.js) to keep it cheap.
+//   grid    every angle side by side in one MP4 (several, of up to
+//           MAX_PER_GRID angles each, for a big take), cut the same way,
+//           built from the 720p previews (see previews.js) to keep it cheap.
 //
 // Why re-encode: a stream copy (-c copy) can only start on a keyframe, and
 // phones put one every 1-2 s, so a copied cut would land up to a couple of
@@ -36,8 +37,6 @@ import { pipeline } from "node:stream/promises";
 import { pool } from "../db/pool.js";
 import { UPLOAD_DIR, storage } from "../storage/index.js";
 
-export const EXPORT_KINDS = new Set(["synced", "grid"]);
-
 export const EXPORT_DIR = process.env.EXPORT_DIR
   ? path.resolve(process.env.EXPORT_DIR)
   : path.join(UPLOAD_DIR, "exports");
@@ -59,6 +58,9 @@ const CELL_LONG = 640;
 const CELL_SHORT = 360;
 const GRID_MAX = 1920;
 const GRID_FPS = 30;
+// More angles than this go in more than one grid video: past 3x2 the cells
+// get too small to see much in.
+export const MAX_PER_GRID = 6;
 
 // --- Planning (pure) -------------------------------------------------------
 
@@ -167,6 +169,20 @@ export function gridArgs(inputs, output, { skips, length, portrait, audioFrom })
   return { args, layout };
 }
 
+/// Which angles (indexes, in order) go in each grid video: as few videos as
+/// fit `max` angles each, shared out evenly (20 angles: 4 videos of 5).
+export function gridGroups(count, max = MAX_PER_GRID) {
+  const videos = Math.ceil(count / max);
+  const groups = [];
+  let next = 0;
+  for (let v = 0; v < videos; v += 1) {
+    const size = Math.ceil((count - next) / (videos - v));
+    groups.push(Array.from({ length: size }, (_, i) => next + i));
+    next += size;
+  }
+  return groups;
+}
+
 /// What identifies an export: its kind and every angle's file and offset.
 /// Anything that changes how the take lines up makes a new key.
 export function exportKey(kind, take) {
@@ -174,7 +190,7 @@ export function exportKey(kind, take) {
     .map((a) => [a.fileId, a.startOffsetMs ?? null])
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   return crypto.createHash("sha256")
-    .update(JSON.stringify({ v: 1, kind, angles }))
+    .update(JSON.stringify({ v: 2, kind, angles }))
     .digest("hex")
     .slice(0, 32);
 }
@@ -387,45 +403,54 @@ const queue = [];
 let draining = false;
 let current = null;
 
-/// Status of these takes' exports of `kind`, queueing any that aren't made
-/// yet. `take`: { sessionId, startedAt, number, angles: [{ userId, name,
-/// fileId, previewFileId, startOffsetMs, syncedBy }] }, angles with a file.
-export async function ensureExports(kind, takes) {
+/// Status of these takes' exports of each of `kinds`, queueing any that
+/// aren't made yet. `take`: { sessionId, startedAt, number, angles: [{
+/// userId, name, fileId, previewFileId, startOffsetMs, syncedBy }] }, angles
+/// with a file. Returns { state: queued|working|ready|failed, progress
+/// (0-1), waiting (other people's jobs ahead), error }.
+export async function ensureExports(kinds, takes) {
   const parts = [];
   for (const take of takes) {
-    const key = exportKey(kind, take);
-    if (await readManifest(key)) {
-      parts.push({ state: "ready", fraction: 1 });
-      continue;
+    for (const kind of kinds) {
+      const key = exportKey(kind, take);
+      const weight = jobWeight(kind, take);
+      if (await readManifest(key)) {
+        parts.push({ state: "ready", fraction: 1, weight });
+        continue;
+      }
+      let job = jobs.get(key);
+      if (job?.state === "failed" && Date.now() - job.failedAt > FAILURE_MEMORY_MS) {
+        jobs.delete(key);
+        job = null;
+      }
+      if (!job) {
+        job = { key, kind, take, weight, state: "queued", fraction: 0 };
+        jobs.set(key, job);
+        queue.push(job);
+        if (!draining) drain();
+      }
+      parts.push(job);
     }
-    let job = jobs.get(key);
-    if (job?.state === "failed" && Date.now() - job.failedAt > FAILURE_MEMORY_MS) {
-      jobs.delete(key);
-      job = null;
-    }
-    if (!job) {
-      job = { key, kind, take, state: "queued", fraction: 0 };
-      jobs.set(key, job);
-      queue.push(job);
-      if (!draining) drain();
-    }
-    parts.push(job);
   }
   return summarize(parts);
 }
 
+// Roughly how long a job takes, for the progress bar: re-encoding a
+// full-size angle costs about four times a whole 720p grid.
+function jobWeight(kind, take) {
+  return kind === "grid" ? 1 : 4 * take.angles.length;
+}
+
 function summarize(parts) {
   const failed = parts.find((p) => p.state === "failed");
-  const ready = parts.filter((p) => p.state === "ready").length;
-  const fraction = parts.reduce((sum, p) => sum + (p.state === "ready" ? 1 : p.fraction), 0);
+  const total = parts.reduce((sum, p) => sum + p.weight, 0);
+  const done = parts.reduce((sum, p) => sum + p.weight * (p.state === "ready" ? 1 : p.fraction), 0);
   return {
-    state: failed ? "failed" : ready === parts.length ? "ready"
+    state: failed ? "failed" : parts.every((p) => p.state === "ready") ? "ready"
       : parts.some((p) => p.state === "working") ? "working" : "queued",
-    progress: parts.length ? Math.min(1, fraction / parts.length) : 1,
-    ready,
-    total: parts.length,
+    progress: total ? Math.min(1, done / total) : 1,
     ...(failed ? { error: failed.error } : {}),
-    // Other takes (perhaps other people's) ahead of or among these.
+    // Other people's downloads being made first.
     waiting: [current, ...queue].filter((job) => job && !parts.includes(job)).length,
   };
 }
@@ -548,27 +573,37 @@ async function makeGrid(job) {
   // reads the same way each time.
   await withWorkFolder(job, async (work) => {
     // The preview has the original's timeline, so the same offsets apply.
+    // Every grid video of a take shares one window, so they line up with
+    // each other and with the synced angles.
     const { files, infos, window } =
       await plan(job, work, take.angles.map((a) => a.previewFileId || a.fileId));
-    const portrait = infos.filter((info) => info.height > info.width).length > infos.length / 2;
-    const audioFrom = infos.findIndex((info) => info.hasAudio);
-    const file = "grid.mp4";
-    const { args } = gridArgs(files, path.join(work, file), {
-      skips: window.skips,
-      length: window.length,
-      portrait,
-      audioFrom: audioFrom === -1 ? null : audioFrom,
-    });
-    const result = await runTool("ffmpeg", args, {
-      onProgress: (done) => { job.fraction = Math.min(1, done / window.length); },
-    });
-    if (result.missing) throw new ToolMissing();
-    if (!result.ok) throw new Error(result.err.trim().split("\n").pop() || "ffmpeg failed");
+    const groups = gridGroups(take.angles.length);
+    const videos = [];
+    for (const [g, group] of groups.entries()) {
+      if (job.cancelled) return null;
+      const portrait =
+        group.filter((i) => infos[i].height > infos[i].width).length > group.length / 2;
+      const audioFrom = group.findIndex((i) => infos[i].hasAudio);
+      const file = `grid-${g + 1}.mp4`;
+      const { args } = gridArgs(group.map((i) => files[i]), path.join(work, file), {
+        skips: group.map((i) => window.skips[i]),
+        length: window.length,
+        portrait,
+        audioFrom: audioFrom === -1 ? null : audioFrom,
+      });
+      const result = await runTool("ffmpeg", args, {
+        onProgress: (done) => {
+          job.fraction = Math.min(1, (g + Math.min(done, window.length) / window.length) / groups.length);
+        },
+      });
+      if (result.missing) throw new ToolMissing();
+      if (!result.ok) throw new Error(result.err.trim().split("\n").pop() || "ffmpeg failed");
+      videos.push({ file, angles: group.map((i) => take.angles[i].name) });
+    }
     return {
       kind: "grid",
       length: window.length,
-      file,
-      angles: take.angles.map((a, i) => ({ name: a.name, skip: window.skips[i], syncedBy: a.syncedBy ?? null })),
+      videos,
       sources: take.angles.flatMap((a) => [a.fileId, a.previewFileId].filter(Boolean)),
     };
   });

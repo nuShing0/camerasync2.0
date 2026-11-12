@@ -1,5 +1,5 @@
-// Synced and grid downloads, through the routes: POST .../exports to make
-// them, GET .../download?kind= to fetch them. With ffmpeg installed (the
+// The synced session download, through the routes: POST .../exports to
+// make it, GET .../download?kind=synced to fetch it. With ffmpeg installed (the
 // server image has it) real videos are made and checked frame by frame;
 // without it only the routes are. Run against the dev Postgres and the
 // local-disk storage driver, like the other route tests.
@@ -136,12 +136,11 @@ async function signUp(label, name) {
 }
 
 // Asks for an export until it's made (or fails).
-async function waitForExport(kind, body = {}) {
+async function waitForExport() {
   for (let i = 0; i < 300; i += 1) {
     const res = await request(app)
       .post(`/api/recordings/sessions/${sessionId}/exports`)
-      .set("Cookie", members[0].cookie)
-      .send({ kind, ...body });
+      .set("Cookie", members[0].cookie);
     expect(res.status).toBe(200);
     if (res.body.state === "ready" || res.body.state === "failed") return res.body;
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -191,46 +190,38 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe("synced and grid downloads", () => {
-  it("answers 409 with progress until the download is made", async () => {
+describe("the synced session download", () => {
+  it("answers 409 with progress until it's made", async () => {
     if (!LOCAL) return;
     const res = await request(app)
       .get(`/api/recordings/sessions/${sessionId}/download?kind=synced`)
       .set("Cookie", members[0].cookie);
     expect(res.status).toBe(409);
-    expect(res.body.status).toMatchObject({ total: 1 });
     expect(["queued", "working", "ready", "failed"]).toContain(res.body.status.state);
+    expect(res.body.status.progress).toBeGreaterThanOrEqual(0);
   });
 
-  it("refuses unknown kinds and bad recordings", async () => {
-    const cookie = members[0].cookie;
-    expect((await request(app).get(`/api/recordings/sessions/${sessionId}/download?kind=raw`)
-      .set("Cookie", cookie)).status).toBe(400);
-    expect((await request(app).get(`/api/recordings/sessions/${sessionId}/download?kind=grid&startedAt=soon`)
-      .set("Cookie", cookie)).status).toBe(400);
-    expect((await request(app).post(`/api/recordings/sessions/${sessionId}/exports`)
-      .set("Cookie", cookie).send({ kind: "everything" })).status).toBe(400);
-    expect((await request(app).post(`/api/recordings/sessions/${sessionId}/exports`)
-      .set("Cookie", cookie).send({ kind: "grid", startedAt: STARTED_AT + 1 })).status).toBe(404);
+  it("refuses unknown kinds", async () => {
+    expect((await request(app).get(`/api/recordings/sessions/${sessionId}/download?kind=grid`)
+      .set("Cookie", members[0].cookie)).status).toBe(400);
   });
 
   it("is only for members of the session's group", async () => {
     expect((await request(app).post(`/api/recordings/sessions/${sessionId}/exports`)
-      .set("Cookie", stranger.cookie).send({ kind: "synced" })).status).toBe(404);
-    expect((await request(app).get(`/api/recordings/sessions/${sessionId}/download?kind=grid`)
+      .set("Cookie", stranger.cookie)).status).toBe(404);
+    expect((await request(app).get(`/api/recordings/sessions/${sessionId}/download?kind=synced`)
       .set("Cookie", stranger.cookie)).status).toBe(404);
   });
 
-  it("says why when this server can't make them", async () => {
+  it("says why when this server can't make it", async () => {
     if (HAS_FFMPEG || !LOCAL) return;
-    const status = await waitForExport("synced");
+    const status = await waitForExport();
     expect(status.state).toBe("failed");
     expect(status.error).toMatch(/ffmpeg/);
   });
 
-  it.skipIf(!HAS_FFMPEG || !LOCAL)("lines every angle up to the same frame and length", async () => {
-    const status = await waitForExport("synced");
-    expect(status).toMatchObject({ state: "ready", ready: 1, total: 1, progress: 1 });
+  it.skipIf(!HAS_FFMPEG || !LOCAL)("lines every angle up, with a video of them all side by side", async () => {
+    expect(await waitForExport()).toMatchObject({ state: "ready", progress: 1 });
 
     const res = await request(app)
       .get(`/api/recordings/sessions/${sessionId}/download?kind=synced`)
@@ -243,6 +234,7 @@ describe("synced and grid downloads", () => {
     const files = unzip(res.body);
     expect([...files.keys()].sort()).toEqual([
       "About these videos.txt",
+      "Recording 001/All angles.mp4",
       "Recording 001/Ana.mp4",
       "Recording 001/Ben.mp4",
       "Recording 001/Cy.mp4",
@@ -257,33 +249,12 @@ describe("synced and grid downloads", () => {
       // ...and same length.
       expect(Math.abs(probe(file).duration - SHARED_SECONDS)).toBeLessThan(0.07);
     }
-  }, 60_000);
 
-  it.skipIf(!HAS_FFMPEG || !LOCAL)("makes one grid video of a recording with every angle", async () => {
-    expect((await waitForExport("grid", { startedAt: STARTED_AT })).state).toBe("ready");
-    const res = await request(app)
-      .get(`/api/recordings/sessions/${sessionId}/download?kind=grid&startedAt=${STARTED_AT}`)
-      .set("Cookie", members[0].cookie)
-      .buffer(true)
-      .parse(binary);
-    expect(res.status).toBe(200);
-    expect(res.headers["content-type"]).toBe("video/mp4");
-    expect(res.headers["content-disposition"]).toMatch(/Recording 001 grid\.mp4/);
-
-    const file = path.join(work, "grid.mp4");
-    fs.writeFileSync(file, res.body);
-    const info = probe(file);
-    // Three landscape angles: 2x2 cells of 640x360, Ana's sound.
+    const grid = path.join(work, "All angles.mp4");
+    fs.writeFileSync(grid, files.get("Recording 001/All angles.mp4"));
+    // Three landscape angles: 2x2 cells of 640x360, Ana's sound, same length.
+    const info = probe(grid);
     expect(info).toMatchObject({ width: 1280, height: 720, hasAudio: true });
     expect(Math.abs(info.duration - SHARED_SECONDS)).toBeLessThan(0.1);
-
-    // The whole session's grid comes as a zip, from the same cached video.
-    const zip = await request(app)
-      .get(`/api/recordings/sessions/${sessionId}/download?kind=grid`)
-      .set("Cookie", members[0].cookie)
-      .buffer(true)
-      .parse(binary);
-    expect(zip.status).toBe(200);
-    expect(unzip(zip.body).get("Recording 001 grid.mp4")).toEqual(res.body);
   }, 60_000);
 });

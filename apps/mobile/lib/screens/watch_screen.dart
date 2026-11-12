@@ -1303,8 +1303,8 @@ class _WatchScreenState extends State<WatchScreen> {
             ),
           if (_recording != null)
             IconButton(
-              onPressed: _downloading ? null : _chooseDownload,
-              tooltip: 'Download this recording',
+              onPressed: _downloading ? null : _download,
+              tooltip: 'Download all videos',
               color: Colors.white,
               icon: _downloading
                   ? const SizedBox(
@@ -1853,72 +1853,12 @@ class _WatchScreenState extends State<WatchScreen> {
 
   bool _downloading = false;
 
-  /// Asks which download, for the open recording: synced videos (every angle
-  /// trimmed to start and end together), one grid video of every angle, or
-  /// the original files.
-  Future<void> _chooseDownload() async {
-    final recording = _recording;
-    if (recording == null) return;
-    final name = 'Recording ${recording.number.toString().padLeft(3, '0')}';
-    final kind = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: kSurface,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 6),
-              child: Text('Download $name',
-                  style: const TextStyle(color: Colors.white54, fontSize: 14)),
-            ),
-            for (final (kind, title, detail, icon) in const [
-              (
-                'synced',
-                'Synced videos',
-                'Every angle trimmed to start and end together (.zip)',
-                Icons.sync
-              ),
-              (
-                'grid',
-                'Grid video',
-                'All angles side by side, lined up (.mp4)',
-                Icons.grid_view
-              ),
-              (
-                'original',
-                'Original files',
-                'As each phone recorded them, not lined up (.zip)',
-                Icons.folder_zip_outlined
-              ),
-            ])
-              ListTile(
-                leading: Icon(icon, color: TeamAccent.of(context).accent),
-                title: Text(title,
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700)),
-                subtitle:
-                    Text(detail, style: const TextStyle(color: Colors.white60)),
-                onTap: () => Navigator.of(context).pop(kind),
-              ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-    if (kind != null && mounted) await _download(kind, recording.startedAtMs);
-  }
-
-  /// Downloads one recording ([kind] 'synced', 'grid' or 'original') and
-  /// opens the share sheet, so it can go to Photos, Files, Drive, a computer
-  /// or a USB stick plugged into the phone. Synced and grid are made on the
-  /// server first: this asks every couple of seconds and shows how far along
-  /// it is.
-  Future<void> _download(String kind, int startedAtMs) async {
+  /// Downloads the whole session as one zip (a folder per recording, every
+  /// angle lined up like the player, plus all of them side by side in one
+  /// video) and opens the share sheet, so it can go to Files, Drive, a
+  /// computer or a USB stick plugged into the phone. The server makes it
+  /// first: this asks every couple of seconds and shows how far along it is.
+  Future<void> _download() async {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _downloading = true);
     final progress = ValueNotifier('Preparing the download…');
@@ -1931,26 +1871,21 @@ class _WatchScreenState extends State<WatchScreen> {
     ));
     File? file;
     try {
-      if (kind != 'original') {
-        while (true) {
-          final status = await _recordings.requestExport(
-              widget.session.id, kind, startedAtMs);
-          if (!mounted) return;
-          if (status.isFailed) {
-            throw ApiException(500, status.describe(kind));
-          }
-          progress.value = status.describe(kind);
-          if (status.isReady) break;
-          await Future<void>.delayed(const Duration(seconds: 2));
-          if (!mounted) return;
-        }
+      while (true) {
+        final status =
+            await _recordings.requestSyncedDownload(widget.session.id);
+        if (!mounted) return;
+        if (status.isFailed) throw ApiException(500, status.describe());
+        progress.value = status.describe();
+        if (status.isReady) break;
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
       }
       final api = widget.auth.api;
       final cookie = api.cookie;
       final request = http.Request(
         'GET',
-        Uri.parse(api.baseUrl +
-            RecordingsApi.downloadPath(widget.session.id, kind, startedAtMs)),
+        Uri.parse(api.baseUrl + RecordingsApi.downloadPath(widget.session.id)),
       );
       if (cookie != null) request.headers['Cookie'] = cookie;
       final response = await http.Client().send(request);
@@ -1958,9 +1893,8 @@ class _WatchScreenState extends State<WatchScreen> {
         throw ApiException(response.statusCode,
             'The download is not available right now (${response.statusCode}).');
       }
-      final type = response.headers['content-type'] ?? 'application/zip';
       final name = _zipName(response.headers['content-disposition']) ??
-          '${widget.session.name}.${type.startsWith('video/') ? 'mp4' : 'zip'}';
+          '${widget.session.name}.zip';
       final dir = await getTemporaryDirectory();
       file = File('${dir.path}/$name');
       final sink = file.openWrite();
@@ -1968,7 +1902,7 @@ class _WatchScreenState extends State<WatchScreen> {
       if (!mounted) return;
       messenger.hideCurrentSnackBar();
       await SharePlus.instance.share(ShareParams(
-        files: [XFile(file.path, mimeType: type.split(';').first)],
+        files: [XFile(file.path, mimeType: 'application/zip')],
         subject: widget.session.name,
       ));
     } on ApiException catch (e) {

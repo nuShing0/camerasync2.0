@@ -12,7 +12,7 @@ import {
   mediaCors,
   uploadSessionVideo,
 } from "../api/recordings.js";
-import { DownloadMenu } from "../components/DownloadMenu.jsx";
+import { DownloadButton } from "../components/DownloadButton.jsx";
 import { anglesPerPage, commonAspect, layoutAngles } from "../recording/angleLayout.js";
 import { JUMP_BEYOND_MS, speedFor } from "../recording/angleSync.js";
 import { angleTrims } from "../recording/angleTrims.js";
@@ -152,9 +152,7 @@ export function PlaybackScreen({ live = null } = {}) {
               </button>
             )}
             {recordings.some((recording) => recording.videos.some((video) => video.url)) && (
-              // The recording on screen, or every one from the list.
-              <DownloadMenu sessionId={sessionId} startedAt={recording?.startedAt ?? null}
-                scopeName={recording ? takeName(recording, recordingIndex) : "all recordings"} />
+              <DownloadButton sessionId={sessionId} />
             )}
           </>
         )}
