@@ -1304,7 +1304,7 @@ class _WatchScreenState extends State<WatchScreen> {
           if (_recording != null)
             IconButton(
               onPressed: _downloading ? null : _download,
-              tooltip: 'Download session',
+              tooltip: 'Download all videos',
               color: Colors.white,
               icon: _downloading
                   ? const SizedBox(
@@ -1853,22 +1853,39 @@ class _WatchScreenState extends State<WatchScreen> {
 
   bool _downloading = false;
 
-  /// Downloads the whole session as one zip (a folder per recording, an
-  /// angle per member) and opens the share sheet, so it can go to Files,
-  /// Drive, a computer or a USB stick plugged into the phone.
+  /// Downloads the whole session as one zip (a folder per recording, every
+  /// angle lined up like the player, plus all of them side by side in one
+  /// video) and opens the share sheet, so it can go to Files, Drive, a
+  /// computer or a USB stick plugged into the phone. The server makes it
+  /// first: this asks every couple of seconds and shows how far along it is.
   Future<void> _download() async {
     final messenger = ScaffoldMessenger.of(context);
     setState(() => _downloading = true);
-    messenger
-        .showSnackBar(const SnackBar(content: Text('Preparing the download…')));
+    final progress = ValueNotifier('Preparing the download…');
+    messenger.showSnackBar(SnackBar(
+      duration: const Duration(days: 1),
+      content: ValueListenableBuilder<String>(
+        valueListenable: progress,
+        builder: (context, text, _) => Text(text),
+      ),
+    ));
     File? file;
     try {
+      while (true) {
+        final status =
+            await _recordings.requestSyncedDownload(widget.session.id);
+        if (!mounted) return;
+        if (status.isFailed) throw ApiException(500, status.describe());
+        progress.value = status.describe();
+        if (status.isReady) break;
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+      }
       final api = widget.auth.api;
       final cookie = api.cookie;
       final request = http.Request(
         'GET',
-        Uri.parse('${api.baseUrl}/api/recordings/sessions/'
-            '${widget.session.id}/download'),
+        Uri.parse(api.baseUrl + RecordingsApi.downloadPath(widget.session.id)),
       );
       if (cookie != null) request.headers['Cookie'] = cookie;
       final response = await http.Client().send(request);
@@ -1896,6 +1913,8 @@ class _WatchScreenState extends State<WatchScreen> {
       messenger.showSnackBar(const SnackBar(
           content: Text("Couldn't download the session. Try again.")));
     } finally {
+      // Left the screen part way: don't leave the progress up.
+      if (!mounted) messenger.hideCurrentSnackBar();
       if (mounted) setState(() => _downloading = false);
     }
   }

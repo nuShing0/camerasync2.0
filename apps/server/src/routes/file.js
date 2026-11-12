@@ -23,6 +23,7 @@ import { retireFile } from "../recordings/retiredFiles.js";
 import { queueThumbnail } from "../recordings/thumbnails.js";
 import { queueScrubFrames } from "../recordings/scrubFrames.js";
 import { clearProgress } from "../recordings/uploadProgress.js";
+import { purgeExportsUsing } from "../recordings/syncedExports.js";
 
 export const fileRouter = Router();
 
@@ -639,4 +640,6 @@ export async function deleteRecordingFiles(fileIds) {
     if (!FILE_ID_PATTERN.test(fileId)) throw new Error("Invalid recording file ID.");
   }
   await storage.remove(fileIds);
+  // And the synced and grid downloads made from them.
+  await purgeExportsUsing(fileIds);
 }

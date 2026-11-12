@@ -12,6 +12,7 @@ import { signupEmailError } from "../auth/emailPolicy.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { storage } from "../storage/index.js";
 import { storedFileIds } from "./file.js";
+import { purgeExportsUsing } from "../recordings/syncedExports.js";
 import {
   SESSION_COOKIE,
   createSession,
@@ -630,6 +631,7 @@ authRouter.delete("/me", requireAuth, async (req, res, next) => {
       // The account is gone either way; a file left behind is only space.
       await storage.remove(fileIds).catch((err) =>
         console.error("Unable to delete a deleted account's videos:", err));
+      await purgeExportsUsing(fileIds);
     }
     res.clearCookie(SESSION_COOKIE, { ...sessionCookieOptions(), maxAge: undefined });
     res.status(204).end();

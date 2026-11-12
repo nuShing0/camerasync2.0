@@ -110,11 +110,21 @@ export async function getSessionVideos(id) {
   return data;
 }
 
-// The whole session as one zip (a folder per recording, an angle per
-// member), for keeping on a computer or USB stick. A plain link: the
-// browser downloads it with the login cookie.
+// The whole session as one zip to keep on a computer or USB stick: a folder
+// per recording with every angle trimmed to start and end together (like
+// the player) and a video of all the angles side by side. A plain link: the
+// browser downloads it with the login cookie. It has to be made first: see
+// requestSyncedDownload.
 export function sessionDownloadUrl(id) {
-  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download`;
+  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download?kind=synced`;
+}
+
+// Asks the server to make the session's download, and how far along it is:
+// { state: "queued" | "working" | "ready" | "failed", progress (0-1),
+// waiting (other people's downloads ahead), error }. Safe to repeat; ask
+// every few seconds until it's ready.
+export async function requestSyncedDownload(id) {
+  return request(`/api/recordings/sessions/${encodeURIComponent(id)}/exports`, { method: "POST" });
 }
 
 // `signal` stops it part way (a take starting): it then rejects with an
