@@ -53,7 +53,6 @@ class QueuedTake {
 
   /// When the next try may start, after a failed one.
   DateTime? retryAt;
-  String? lastError;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -477,7 +476,6 @@ class UploadQueue extends ChangeNotifier {
 
   void _failed(QueuedTake item, String error) {
     item.attempts += 1;
-    item.lastError = error;
     final wait =
         _retryDelays[math.min(item.attempts - 1, _retryDelays.length - 1)];
     item.retryAt = DateTime.now().add(Duration(seconds: wait));

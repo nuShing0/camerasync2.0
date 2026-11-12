@@ -494,7 +494,6 @@ const css = `
   .home-week-text > span { color: #8a8a8a; font-size: 0.85rem; }
   .home-week-more { margin-top: 8px; }
   .home-week-text > .home-week-next { color: var(--accent); font-size: 0.75rem; font-weight: 700; }
-  .home-week-text > .home-week-open { color: var(--accent); font-weight: 600; }
 
   .home-error {
     margin: 0; padding: 10px 14px; border: 1px solid #5a2a2a; border-radius: 8px;

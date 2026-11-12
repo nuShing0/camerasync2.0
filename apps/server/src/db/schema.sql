@@ -58,13 +58,6 @@ ALTER TABLE group_members
     ADD CONSTRAINT group_members_role_check
     CHECK (role IN ('admin', 'member'));
 
-CREATE TABLE IF NOT EXISTS organizations (
-    org_id VARCHAR(255) PRIMARY KEY,
-    name VARCHAR(64),
-    admins JSON DEFAULT '[]',
-    rec_sessions JSON DEFAULT '[]'
-);
-
 -- stores scheduled and live group sessions
 CREATE TABLE IF NOT EXISTS recording_sessions (
     id VARCHAR(6) PRIMARY KEY
@@ -99,38 +92,6 @@ CREATE TABLE IF NOT EXISTS recording_session_members (
     user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
     joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (session_id, user_id)
-);
-
-CREATE TABLE IF NOT EXISTS videos (
-    recording_uri TEXT,
-    session_id VARCHAR(255),
-    author BIGINT
-);
-
-CREATE TABLE IF NOT EXISTS recordings (
-    id uuid PRIMARY KEY,
-    name text,
-    status text NOT NULL DEFAULT 'created'
-    CHECK (status IN ('created', 'recording', 'stopped', 'closed')),
-    created_at timestamptz NOT NULL DEFAULT now(),
-    started_at timestamptz,
-    stopped_at timestamptz,
-    closed_at timestamptz
-);
-
-CREATE TABLE IF NOT EXISTS posts (
-    post_id     VARCHAR(255) PRIMARY KEY,
-    author      BIGINT NOT NULL,
-    content     TEXT,
-    created_at  TIMESTAMP DEFAULT NOW(),
-    video_meta  JSON,
-    reply       VARCHAR(255)
-);
-
-CREATE TABLE IF NOT EXISTS socket_io (
-    id BIGSERIAL UNIQUE PRIMARY KEY,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    payload BYTEA
 );
 
 CREATE TABLE IF NOT EXISTS socket_io_attachments (
@@ -298,12 +259,6 @@ UPDATE groups SET primary_color = '#ead217' WHERE primary_color = '#ffc72c';
 -- uploads from before this was tracked (treated as 0).
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS start_offset_ms INTEGER;
 
--- Where the sync beep (see src/recordings/syncBeep.js) was found in this
--- video, in ms from its start. Every camera heard the beep at the same
--- moment, so this lines the angles up more exactly than start_offset_ms,
--- which can't see a phone's camera warming up. NULL when it wasn't heard.
-ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS beep_at_ms INTEGER;
-
 -- A session can stand on its own, without a group: whoever starts it shares
 -- its code, and anyone signed in can join with it. Only its creator and the
 -- people who joined can see it (see sessionVisibleSql in
@@ -327,16 +282,6 @@ BEGIN
   END IF;
 END $$;
 
--- When the end beep (see src/recordings/syncBeep.js) played for this
--- recording, in server-clock ms. The device that stops a take plays it just
--- before every camera stops. NULL for takes stopped before it existed.
-ALTER TABLE session_recordings ADD COLUMN IF NOT EXISTS end_beep_epoch_ms BIGINT;
-
--- Where the end beep was found in this video, in ms from its start. Lines up
--- an angle that started too late to hear the start beep. NULL when it
--- wasn't heard.
-ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS end_beep_at_ms INTEGER;
-
 -- When a device last joined or left this live session's room. A live
 -- session nobody has been connected to for a while is ended automatically
 -- (see src/sessions/idleSessions.js). NULL until the first join after this
@@ -354,7 +299,8 @@ ALTER TABLE recording_session_videos
 -- What start_offset_ms was measured from: 'frame' when the device reported
 -- the moment its camera captured the first frame (exact), 'call' when it's
 -- when the app asked the camera to start (up to a second early on some
--- phones). NULL for uploads from before this was recorded.
+-- phones), 'beep' when it was worked out from the old sync beep (see the
+-- end of this file). NULL for uploads from before this was recorded.
 ALTER TABLE recording_session_videos ADD COLUMN IF NOT EXISTS start_offset_source TEXT;
 
 -- A still from the video for the session lists (see
@@ -414,3 +360,47 @@ CREATE TABLE IF NOT EXISTS resumable_uploads (
 -- A recording deleted on its own (its videos are gone): the number stays
 -- taken, and late uploads for it are refused (see recordings/numbering.js).
 ALTER TABLE session_recordings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+-- Takes used to be lined up by a beep the starting device played, found in
+-- each video's sound. No device plays it any more, so its columns go. Where
+-- an older take is lined up by its beep (a video with no first-frame time,
+-- or one too far off the beep to trust), that offset is kept in
+-- start_offset_ms first, so old takes stay in line.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_name = 'recording_session_videos' AND column_name = 'beep_at_ms'
+  ) THEN
+    UPDATE recording_session_videos v
+       SET start_offset_ms = b.offset_ms, start_offset_source = 'beep'
+      FROM (
+        SELECT v2.session_id, v2.user_id, v2.started_at_ms,
+               CASE
+                 WHEN v2.beep_at_ms IS NOT NULL THEN 1500 - v2.beep_at_ms
+                 WHEN v2.end_beep_at_ms IS NOT NULL AND sr.end_beep_epoch_ms IS NOT NULL
+                   THEN (sr.end_beep_epoch_ms - v2.end_beep_at_ms - v2.started_at_ms)::INTEGER
+               END AS offset_ms
+          FROM recording_session_videos v2
+          LEFT JOIN session_recordings sr
+            ON sr.session_id = v2.session_id AND sr.started_at_ms = v2.started_at_ms
+      ) b
+     WHERE b.session_id = v.session_id AND b.user_id = v.user_id
+       AND b.started_at_ms = v.started_at_ms
+       AND b.offset_ms IS NOT NULL
+       AND (v.start_offset_source IS DISTINCT FROM 'frame' OR v.start_offset_ms IS NULL
+            OR abs(v.start_offset_ms - b.offset_ms) > 500);
+    ALTER TABLE recording_session_videos DROP COLUMN beep_at_ms;
+    ALTER TABLE recording_session_videos DROP COLUMN IF EXISTS end_beep_at_ms;
+    ALTER TABLE session_recordings DROP COLUMN IF EXISTS end_beep_epoch_ms;
+  END IF;
+END $$;
+
+-- Tables from early plans that nothing uses (an organization, posts and video
+-- list, the first recordings flow, and a socket table the Socket.IO adapter
+-- never touches; it uses socket_io_attachments).
+DROP TABLE IF EXISTS organizations;
+DROP TABLE IF EXISTS videos;
+DROP TABLE IF EXISTS recordings;
+DROP TABLE IF EXISTS posts;
+DROP TABLE IF EXISTS socket_io;

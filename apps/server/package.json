@@ -14,7 +14,6 @@
     "@aws-sdk/client-s3": "^3.1141.0",
     "@aws-sdk/cloudfront-signer": "^3.1157.0",
     "@aws-sdk/lib-storage": "^3.1141.0",
-    "@aws-sdk/s3-request-presigner": "^3.1141.0",
     "@socket.io/postgres-adapter": "^0.5.0",
     "archiver": "^7.0.1",
     "bcryptjs": "^3.0.3",
@@ -24,12 +23,12 @@
     "express": "^4.19.2",
     "multer": "^2.2.0",
     "nodemailer": "^10.0.13",
-    "nodemon": "^3.1.14",
     "pg": "^8.12.0",
     "socket.io": "^4.7.5",
     "timesync": "^1.0.11"
   },
   "devDependencies": {
+    "nodemon": "^3.1.14",
     "supertest": "^7.3.1",
     "vitest": "^5.0.3"
   }

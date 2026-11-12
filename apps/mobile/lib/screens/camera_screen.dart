@@ -243,10 +243,7 @@ class _CameraScreenState extends State<CameraScreen> {
     final now = DateTime.now().millisecondsSinceEpoch;
     final startAt = _plannedLocalStartAtEpochMs;
     final stopAt = command.localStopAtEpochMs;
-    final cancelled = command.localEndBeepAtEpochMs == null &&
-        stopAt != null &&
-        startAt != null &&
-        stopAt < startAt;
+    final cancelled = stopAt != null && startAt != null && stopAt < startAt;
 
     if (!(_cameraController?.value.isRecordingVideo ?? false)) {
       // Stopped before it started: nothing to save, just unlock.

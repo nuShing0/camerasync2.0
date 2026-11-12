@@ -432,13 +432,4 @@ const groupsCss = `
     cursor: default;
     opacity: 0.55;
   }
-  @media (max-width: 480px) {
-    .group-privacy-row {
-      grid-template-columns: 1fr;
-      gap: 0;
-    }
-    .group-visibility {
-      margin-bottom: 8px;
-    }
-  }
 `;

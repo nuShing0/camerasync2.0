@@ -645,13 +645,10 @@ const css = `
   .gs-error { color: #ff8a80 !important; }
   .gs-form { display: flex; flex-direction: column; gap: 12px; }
   .gs-form label { display: flex; flex-direction: column; gap: 6px; color: #ddd; font-size: 0.85rem; font-weight: 600; }
-  .gs-form input:not([type=checkbox]), .gs-inline select {
+  .gs-form input:not([type=checkbox]) {
     box-sizing: border-box; padding: 8px 10px; border: 1px solid #3a3a3a; border-radius: 7px;
     background: #262626; color: #f0f0f0; font: inherit;
   }
-  .gs-inline { display: flex; flex-wrap: wrap; gap: 10px; }
-  .gs-inline select { flex: 1; min-width: 180px; }
-  .gs-spaced { margin-top: 18px !important; }
   .gs-button-danger { border-color: #5a2a2a; background: #2a1414; color: #ff8a80; }
   .gs-button-danger:hover { background: #3a1a1a; }
   .gs-members { list-style: none; margin: 0; padding: 0; }
@@ -681,7 +678,6 @@ const css = `
   .gs-card .gs-section-row h2 { margin: 0; }
   .gs-view-all { color: var(--accent); font-size: 0.9rem; font-weight: 600; text-decoration: none; }
   .gs-view-all:hover { text-decoration: underline; }
-  .gs-heading { margin: 10px 0 -4px; color: #999; font-size: 0.85rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
   /* Starting a session: a card with the name and a big Start. */
   .gs-start {
     display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px;

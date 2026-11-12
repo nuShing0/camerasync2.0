@@ -17,7 +17,6 @@ class RecordingSession {
     this.groupId,
     this.scheduledAt,
     this.memberCount,
-    this.totalRecordings,
     this.recordingCount,
     this.createdBy,
     this.thumbnailUrl,
@@ -37,9 +36,6 @@ class RecordingSession {
 
   /// Null for sessions that predate attendance tracking.
   final int? memberCount;
-
-  /// Angles (one per phone per take) across the session.
-  final int? totalRecordings;
 
   /// Takes: Recording 001, 002, ...
   final int? recordingCount;
@@ -73,7 +69,6 @@ class RecordingSession {
             ? null
             : DateTime.tryParse(json['scheduledAt'].toString())?.toLocal(),
         memberCount: (json['memberCount'] as num?)?.toInt(),
-        totalRecordings: (json['totalRecordings'] as num?)?.toInt(),
         recordingCount: (json['recordingCount'] as num?)?.toInt(),
         createdBy: (json['createdBy'] as num?)?.toInt(),
         thumbnailUrl: json['thumbnailUrl'] as String?,
@@ -346,14 +341,6 @@ class RecordingsApi {
         .toList();
   }
 
-  /// Joins (or re-joins) a session, which also flips a scheduled session to
-  /// active. Must succeed before the socket room will accept this user.
-  /// How many videos this account has uploaded, across all groups.
-  Future<int> getMyVideoCount() async {
-    final data = await _api.get('/api/recordings/my-video-count');
-    return ((data as Map)['count'] as num).toInt();
-  }
-
   /// Schedule a session for one of the user's groups (admins and owner).
   Future<RecordingSession> scheduleSession({
     required String groupId,
@@ -403,6 +390,8 @@ class RecordingsApi {
     await _api.delete('/api/recordings/sessions/$id');
   }
 
+  /// Joins (or re-joins) a session, which also flips a scheduled session to
+  /// active. Must succeed before the socket room will accept this user.
   Future<RecordingSession> joinSession(String id) async {
     final data = await _api.post('/api/recordings/sessions/$id/join');
     return RecordingSession.fromJson(

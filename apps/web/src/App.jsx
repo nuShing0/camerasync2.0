@@ -81,7 +81,6 @@ function Root() {
   );
 }
 
-// Pulls ?token= out of the reset link's URL.
 // Signed-out visits to an app page (an invite link, say) go to sign-in and
 // come back afterwards.
 function SignedInOnly() {
