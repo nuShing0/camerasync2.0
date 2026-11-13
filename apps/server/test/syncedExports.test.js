@@ -11,8 +11,8 @@ process.env.EXPORT_DIR = EXPORT_DIR;
 vi.mock("../src/db/pool.js", () => ({ pool: { query: vi.fn() } }));
 
 const {
-  MAX_PER_GRID, canCopy, exportKey, gridArgs, gridGroups, gridLayout, openExport,
-  purgeExportsUsing, sweepExports, syncWindow, syncedAngleArgs,
+  MAX_PER_GRID, exportKey, gridArgs, gridGroups, gridLayout, openExport,
+  purgeExportsUsing, sweepExports, syncWindow,
 } = await import("../src/recordings/syncedExports.js");
 
 afterAll(() => fs.rmSync(EXPORT_DIR, { recursive: true, force: true }));
@@ -51,40 +51,6 @@ describe("syncWindow", () => {
       { startOffsetMs: 2_000, duration: 10 },
     ])).toBeNull();
     expect(syncWindow([])).toBeNull();
-  });
-});
-
-describe("syncedAngleArgs", () => {
-  it("re-encodes from the exact frame when the start is cut", () => {
-    const args = syncedAngleArgs("in.mov", "out.mp4", { skip: 0.97, length: 28 });
-    // -ss before -i, and a real encoder, not a copy.
-    expect(args.indexOf("-ss")).toBeLessThan(args.indexOf("-i"));
-    expect(args[args.indexOf("-ss") + 1]).toBe("0.97");
-    expect(args[args.indexOf("-t") + 1]).toBe("28");
-    expect(args).toContain("libx264");
-    expect(args).not.toContain("copy");
-    expect(args.at(-1)).toBe("out.mp4");
-  });
-
-  it("copies the angle that started last: only its end is cut", () => {
-    const args = syncedAngleArgs("in.mp4", "out.mp4", { skip: 0, length: 28, copy: true });
-    expect(args).not.toContain("-ss");
-    expect(args[args.indexOf("-c") + 1]).toBe("copy");
-    expect(args[args.indexOf("-t") + 1]).toBe("28");
-  });
-
-  it("keeps the sound when there is some", () => {
-    expect(syncedAngleArgs("in.mp4", "out.mp4", { skip: 1, length: 2 })).toContain("0:a:0?");
-  });
-});
-
-describe("canCopy", () => {
-  it("copies only an uncut H.264 or HEVC angle", () => {
-    expect(canCopy(0, "h264")).toBe(true);
-    expect(canCopy(0, "hevc")).toBe(true);
-    expect(canCopy(0.5, "h264")).toBe(false);
-    // A laptop's VP9 doesn't go in an MP4 everyone can play.
-    expect(canCopy(0, "vp9")).toBe(false);
   });
 });
 
@@ -141,6 +107,14 @@ describe("gridArgs", () => {
     expect(silent.args.some((arg) => /:a:/.test(arg))).toBe(false);
   });
 
+  it("keeps ffmpeg's memory down: one decoding thread per input", () => {
+    // With the defaults a 5-angle grid reached 1.3 GB on the 1.9 GB server.
+    const { args } = gridArgs(["a.mp4", "b.mp4", "c.mp4"], "grid.mp4", window);
+    const inputs = args.flatMap((arg, i) => (arg === "-i" ? [i] : []));
+    for (const i of inputs) expect(args.slice(i - 6, i - 4)).toEqual(["-threads", "1"]);
+    expect(args[args.indexOf("-filter_threads") + 1]).toBe("1");
+  });
+
   it("handles a single angle without xstack", () => {
     const { args } = gridArgs(["a.mp4"], "grid.mp4", { ...window, skips: [0] });
     expect(args[args.indexOf("-filter_complex") + 1]).not.toContain("xstack");
@@ -174,16 +148,16 @@ describe("exportKey", () => {
   };
 
   it("is the same for the same files and offsets, in any order", () => {
-    expect(exportKey("synced", take)).toBe(
-      exportKey("synced", { angles: [...take.angles].reverse() }));
+    expect(exportKey("grid", take)).toBe(
+      exportKey("grid", { angles: [...take.angles].reverse() }));
   });
 
   it("changes with the kind, a better offset or a late angle", () => {
-    const key = exportKey("synced", take);
-    expect(exportKey("grid", take)).not.toBe(key);
-    expect(exportKey("synced", { angles: [take.angles[0], { ...take.angles[1], startOffsetMs: 40 }] }))
+    const key = exportKey("grid", take);
+    expect(exportKey("other", take)).not.toBe(key);
+    expect(exportKey("grid", { angles: [take.angles[0], { ...take.angles[1], startOffsetMs: 40 }] }))
       .not.toBe(key);
-    expect(exportKey("synced", { angles: [...take.angles, { fileId: "c.mp4", startOffsetMs: 0 }] }))
+    expect(exportKey("grid", { angles: [...take.angles, { fileId: "c.mp4", startOffsetMs: 0 }] }))
       .not.toBe(key);
   });
 });

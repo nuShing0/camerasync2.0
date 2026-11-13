@@ -110,9 +110,9 @@ export async function getSessionVideos(id) {
   return data;
 }
 
-// The whole session as one zip to keep on a computer or USB stick: a folder
-// per recording with every angle trimmed to start and end together (like
-// the player) and a video of all the angles side by side. A plain link: the
+// The whole session as one zip to keep on a computer or USB stick: a video
+// per recording with every angle side by side, lined up like the player.
+// A plain link: the
 // browser downloads it with the login cookie. It has to be made first: see
 // requestSyncedDownload.
 export function sessionDownloadUrl(id) {

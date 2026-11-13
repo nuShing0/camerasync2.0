@@ -438,8 +438,8 @@ class RecordingsApi {
     await _api.delete('/api/recordings/sessions/$id/recordings/$startedAtMs');
   }
 
-  /// Asks the server to make the session's download (every angle lined up,
-  /// plus the angles side by side), and says how far along it is. Safe to
+  /// Asks the server to make the session's download (every angle side by
+  /// side, lined up), and says how far along it is. Safe to
   /// repeat: ask every couple of seconds until it's ready, then fetch
   /// [downloadPath].
   Future<ExportStatus> requestSyncedDownload(String id) async {

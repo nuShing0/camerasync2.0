@@ -1,6 +1,7 @@
-// The synced session download, through the routes: POST .../exports to
-// make it, GET .../download?kind=synced to fetch it. With ffmpeg installed (the
-// server image has it) real videos are made and checked frame by frame;
+// The lined-up session download (every angle side by side), through the
+// routes: POST .../exports to make it, GET .../download?kind=synced to fetch
+// it. With ffmpeg installed (the server image has it) real videos are made
+// and checked frame by frame;
 // without it only the routes are. Run against the dev Postgres and the
 // local-disk storage driver, like the other route tests.
 import "dotenv/config";
@@ -59,6 +60,9 @@ const SHARED_SECONDS = 1.8;
 const brightness = (worldFrame) => 16 + ((worldFrame * 4) % 200);
 
 const fileIdFor = (i) => `${RUN}${i}`.padEnd(32, "0") + ".mp4";
+// A second recording whose only video is broken: it can't be made, and
+// mustn't hold up the first.
+const BROKEN = `${RUN}b`.padEnd(32, "0") + ".mp4";
 
 function makeVideo(file, { offsetMs, seconds, audio }) {
   const firstFrame = Math.round((offsetMs / 1000) * FPS);
@@ -77,10 +81,12 @@ function makeVideo(file, { offsetMs, seconds, audio }) {
   if (result.status !== 0) throw new Error(String(result.stderr));
 }
 
-function firstFrameBrightness(file) {
+// Brightness of the first frame, in a w x h box at x, y.
+function firstFrameBrightness(file, { x, y, w, h }) {
   const result = spawnSync("ffmpeg", [
     "-v", "info", "-i", file, "-frames:v", "1",
-    "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG", "-f", "null", "-",
+    "-vf", `crop=${w}:${h}:${x}:${y},signalstats,metadata=print:key=lavfi.signalstats.YAVG`,
+    "-f", "null", "-",
   ]);
   return Number(/YAVG=([\d.]+)/.exec(String(result.stderr))?.[1]);
 }
@@ -175,10 +181,17 @@ beforeAll(async () => {
       [sessionId, members[i].id, STARTED_AT, fileIdFor(i), angle.offsetMs]
     );
   }
+  fs.writeFileSync(path.join(UPLOAD_DIR, BROKEN), "not a video");
+  await pool.query(
+    `INSERT INTO recording_session_videos (session_id, user_id, started_at_ms, file_id)
+     VALUES ($1, $2, $3, $4)`,
+    [sessionId, members[0].id, STARTED_AT + 60_000, BROKEN]
+  );
 }, 60_000);
 
 afterAll(async () => {
   for (const i of ANGLES.keys()) fs.rmSync(path.join(UPLOAD_DIR, fileIdFor(i)), { force: true });
+  fs.rmSync(path.join(UPLOAD_DIR, BROKEN), { force: true });
   fs.rmSync(work, { recursive: true, force: true });
   fs.rmSync(EXPORT_DIR, { recursive: true, force: true });
   await pool.query("DELETE FROM groups WHERE group_id = $1", [GROUP_ID]);
@@ -220,8 +233,9 @@ describe("the synced session download", () => {
     expect(status.error).toMatch(/ffmpeg/);
   });
 
-  it.skipIf(!HAS_FFMPEG || !LOCAL)("lines every angle up, with a video of them all side by side", async () => {
-    expect(await waitForExport()).toMatchObject({ state: "ready", progress: 1 });
+  it.skipIf(!HAS_FFMPEG || !LOCAL)("puts every angle side by side, lined up", async () => {
+    // Ready, with the broken recording left out.
+    expect(await waitForExport()).toMatchObject({ state: "ready", progress: 1, skipped: 1 });
 
     const res = await request(app)
       .get(`/api/recordings/sessions/${sessionId}/download?kind=synced`)
@@ -232,29 +246,23 @@ describe("the synced session download", () => {
     expect(res.headers["content-disposition"]).toMatch(/filename="Pyramid \d{4}-\d{2}-\d{2} synced\.zip"/);
 
     const files = unzip(res.body);
-    expect([...files.keys()].sort()).toEqual([
-      "About these videos.txt",
-      "Recording 001/All angles.mp4",
-      "Recording 001/Ana.mp4",
-      "Recording 001/Ben.mp4",
-      "Recording 001/Cy.mp4",
-    ]);
-    expect(String(files.get("About these videos.txt"))).toContain("Ana: 0.400 s trimmed from the start (first frame)");
+    expect([...files.keys()].sort()).toEqual(["About these videos.txt", "Recording 001.mp4"]);
+    const about = String(files.get("About these videos.txt"));
+    expect(about).toContain("Ana: 0.400 s trimmed from the start (first frame)");
+    expect(about).toContain("Ben: 0.000 s trimmed from the start (first frame)");
+    expect(about).toContain("Recording 002: not included.");
 
-    for (const name of ["Ana", "Ben", "Cy"]) {
-      const file = path.join(work, `${name}.mp4`);
-      fs.writeFileSync(file, files.get(`Recording 001/${name}.mp4`));
-      // Same first moment (frame-exact, though 12 frames is mid-GOP for Ana)...
-      expect(Math.abs(firstFrameBrightness(file) - brightness(SHARED_START_FRAME))).toBeLessThan(2);
-      // ...and same length.
-      expect(Math.abs(probe(file).duration - SHARED_SECONDS)).toBeLessThan(0.07);
-    }
-
-    const grid = path.join(work, "All angles.mp4");
-    fs.writeFileSync(grid, files.get("Recording 001/All angles.mp4"));
-    // Three landscape angles: 2x2 cells of 640x360, Ana's sound, same length.
+    const grid = path.join(work, "Recording 001.mp4");
+    fs.writeFileSync(grid, files.get("Recording 001.mp4"));
+    // Three landscape angles: 2x2 cells of 640x360, Ana's sound, the shared length.
     const info = probe(grid);
     expect(info).toMatchObject({ width: 1280, height: 720, hasAudio: true });
     expect(Math.abs(info.duration - SHARED_SECONDS)).toBeLessThan(0.1);
+    // Every cell starts on the same moment (frame-exact, though 12 frames is
+    // mid-GOP for Ana): the middle of each cell, the last row centred.
+    for (const [x, y] of [[0, 0], [640, 0], [320, 360]]) {
+      const cell = { x: x + 220, y: y + 80, w: 200, h: 200 };
+      expect(Math.abs(firstFrameBrightness(grid, cell) - brightness(SHARED_START_FRAME))).toBeLessThan(2);
+    }
   }, 60_000);
 });

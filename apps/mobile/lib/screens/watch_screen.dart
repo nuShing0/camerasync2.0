@@ -1853,9 +1853,9 @@ class _WatchScreenState extends State<WatchScreen> {
 
   bool _downloading = false;
 
-  /// Downloads the whole session as one zip (a folder per recording, every
-  /// angle lined up like the player, plus all of them side by side in one
-  /// video) and opens the share sheet, so it can go to Files, Drive, a
+  /// Downloads the whole session as one zip (a video per recording with
+  /// every angle side by side, lined up like the player) and opens the
+  /// share sheet, so it can go to Files, Drive, a
   /// computer or a USB stick plugged into the phone. The server makes it
   /// first: this asks every couple of seconds and shows how far along it is.
   Future<void> _download() async {

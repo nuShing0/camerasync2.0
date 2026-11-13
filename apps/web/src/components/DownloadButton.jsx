@@ -6,9 +6,9 @@ import { downloadStatusText } from "../recording/downloadStatus.js";
 const POLL_MS = 2000;
 
 // The download button in a session's title row. One click gets the whole
-// session as a zip: every angle lined up like the player, plus the angles
-// side by side in one video per recording. The server makes it first, which
-// takes a minute or more the first time; meanwhile this asks every couple of
+// session as a zip: one video per recording with every angle side by side,
+// lined up like the player. The server makes it first, which takes a minute
+// or more the first time; meanwhile this asks every couple of
 // seconds, shows how far along it is, and downloads it once it's ready.
 export function DownloadButton({ sessionId }) {
   // While a download is being made: the server's latest status (null
@@ -51,7 +51,7 @@ export function DownloadButton({ sessionId }) {
   const state = making?.status?.state;
   const busy = Boolean(making) && state !== "ready" && state !== "failed";
   const percent = Math.floor((making?.status?.progress ?? 0) * 100);
-  const label = making ? downloadStatusText(making.status) : "Download all videos, lined up";
+  const label = making ? downloadStatusText(making.status) : "Download all videos, side by side";
 
   return (
     <div className="download-button">
