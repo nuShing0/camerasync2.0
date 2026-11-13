@@ -112,19 +112,22 @@ export async function getSessionVideos(id) {
 
 // The whole session as one zip to keep on a computer or USB stick: a video
 // per recording with every angle side by side, lined up like the player.
-// A plain link: the
-// browser downloads it with the login cookie. It has to be made first: see
-// requestSyncedDownload.
-export function sessionDownloadUrl(id) {
-  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download?kind=synced`;
+// With `startedAt`, just that recording's video (an MP4, no zip). A plain
+// link: the browser downloads it with the login cookie. It has to be made
+// first: see requestSyncedDownload.
+export function sessionDownloadUrl(id, startedAt) {
+  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download?kind=synced` +
+    (startedAt ? `&startedAt=${startedAt}` : "");
 }
 
-// Asks the server to make the session's download, and how far along it is:
+// Asks the server to make the session's download (or, with `startedAt`, one
+// recording's), and how far along it is:
 // { state: "queued" | "working" | "ready" | "failed", progress (0-1),
 // waiting (other people's downloads ahead), error }. Safe to repeat; ask
 // every few seconds until it's ready.
-export async function requestSyncedDownload(id) {
-  return request(`/api/recordings/sessions/${encodeURIComponent(id)}/exports`, { method: "POST" });
+export async function requestSyncedDownload(id, startedAt) {
+  const one = startedAt ? `?startedAt=${startedAt}` : "";
+  return request(`/api/recordings/sessions/${encodeURIComponent(id)}/exports${one}`, { method: "POST" });
 }
 
 // `signal` stops it part way (a take starting): it then rejects with an

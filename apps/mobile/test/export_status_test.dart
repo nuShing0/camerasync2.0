@@ -29,4 +29,9 @@ void main() {
     expect(RecordingsApi.downloadPath('abc123'),
         '/api/recordings/sessions/abc123/download?kind=synced');
   });
+
+  test("downloadPath asks for one recording's video", () {
+    expect(RecordingsApi.downloadPath('abc123', startedAtMs: 1794528943050),
+        '/api/recordings/sessions/abc123/download?kind=synced&startedAt=1794528943050');
+  });
 }

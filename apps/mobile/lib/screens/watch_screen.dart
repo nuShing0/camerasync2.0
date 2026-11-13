@@ -649,6 +649,7 @@ class _WatchScreenState extends State<WatchScreen> {
         entry.value.pause();
       }
     }
+    _applySound();
 
     final clockIndex = live.contains(_selected)
         ? _selected
@@ -710,6 +711,8 @@ class _WatchScreenState extends State<WatchScreen> {
     );
     try {
       await player.initialize();
+      // Silent until _applySound picks the one angle heard.
+      await player.setVolume(0);
       // An iPhone opens a laptop's VP9 video without complaint but has no
       // picture for it (size zero): count that as not playable, so the
       // H.264 preview is tried instead.
@@ -757,11 +760,23 @@ class _WatchScreenState extends State<WatchScreen> {
     }
   }
 
+  /// Plays one angle's sound, the one being watched (expanded in the grid,
+  /// picked, or the big one upright), and mutes the rest: every phone's at
+  /// once was loud and echoed. As on the website and the TV.
+  void _applySound() {
+    var heard = _focused ?? _selected;
+    if (!_players.containsKey(heard)) heard = _players.keys.firstOrNull ?? -1;
+    for (final entry in _players.entries) {
+      entry.value.setVolume(entry.key == heard ? 1 : 0);
+    }
+  }
+
   Future<void> _selectAngle(int i) async {
     if (i == _selected) return;
     setState(() => _selected = i);
     if (_gridMode) {
       _setClock(_players[i] ?? _clockPlayer);
+      _applySound();
     } else {
       await _syncPlayers();
     }
@@ -1304,7 +1319,9 @@ class _WatchScreenState extends State<WatchScreen> {
           if (_recording != null)
             IconButton(
               onPressed: _downloading ? null : _download,
-              tooltip: 'Download all videos',
+              tooltip: _picking
+                  ? 'Download every recording'
+                  : 'Download this recording',
               color: Colors.white,
               icon: _downloading
                   ? const SizedBox(
@@ -1853,13 +1870,15 @@ class _WatchScreenState extends State<WatchScreen> {
 
   bool _downloading = false;
 
-  /// Downloads the whole session as one zip (a video per recording with
-  /// every angle side by side, lined up like the player) and opens the
-  /// share sheet, so it can go to Files, Drive, a
-  /// computer or a USB stick plugged into the phone. The server makes it
-  /// first: this asks every couple of seconds and shows how far along it is.
+  /// Downloads the recording being watched (its angles side by side, lined
+  /// up like the player: one video), or on the list of recordings the whole
+  /// session as one zip of those, and opens the share sheet, so it can go
+  /// to Photos, Files, Drive, a computer or a USB stick plugged into the
+  /// phone. The server makes it first: this asks every couple of seconds
+  /// and shows how far along it is.
   Future<void> _download() async {
     final messenger = ScaffoldMessenger.of(context);
+    final startedAtMs = _picking ? null : _recording?.startedAtMs;
     setState(() => _downloading = true);
     final progress = ValueNotifier('Preparing the download…');
     messenger.showSnackBar(SnackBar(
@@ -1872,8 +1891,8 @@ class _WatchScreenState extends State<WatchScreen> {
     File? file;
     try {
       while (true) {
-        final status =
-            await _recordings.requestSyncedDownload(widget.session.id);
+        final status = await _recordings
+            .requestSyncedDownload(widget.session.id, startedAtMs: startedAtMs);
         if (!mounted) return;
         if (status.isFailed) throw ApiException(500, status.describe());
         progress.value = status.describe();
@@ -1885,7 +1904,9 @@ class _WatchScreenState extends State<WatchScreen> {
       final cookie = api.cookie;
       final request = http.Request(
         'GET',
-        Uri.parse(api.baseUrl + RecordingsApi.downloadPath(widget.session.id)),
+        Uri.parse(api.baseUrl +
+            RecordingsApi.downloadPath(widget.session.id,
+                startedAtMs: startedAtMs)),
       );
       if (cookie != null) request.headers['Cookie'] = cookie;
       final response = await http.Client().send(request);
@@ -1893,8 +1914,9 @@ class _WatchScreenState extends State<WatchScreen> {
         throw ApiException(response.statusCode,
             'The download is not available right now (${response.statusCode}).');
       }
-      final name = _zipName(response.headers['content-disposition']) ??
-          '${widget.session.name}.zip';
+      final video = response.headers['content-type'] == 'video/mp4';
+      final name = _fileName(response.headers['content-disposition']) ??
+          '${widget.session.name}.${video ? 'mp4' : 'zip'}';
       final dir = await getTemporaryDirectory();
       file = File('${dir.path}/$name');
       final sink = file.openWrite();
@@ -1902,7 +1924,9 @@ class _WatchScreenState extends State<WatchScreen> {
       if (!mounted) return;
       messenger.hideCurrentSnackBar();
       await SharePlus.instance.share(ShareParams(
-        files: [XFile(file.path, mimeType: 'application/zip')],
+        files: [
+          XFile(file.path, mimeType: video ? 'video/mp4' : 'application/zip')
+        ],
         subject: widget.session.name,
       ));
     } on ApiException catch (e) {
@@ -1910,8 +1934,8 @@ class _WatchScreenState extends State<WatchScreen> {
       messenger.showSnackBar(SnackBar(content: Text(e.message)));
     } catch (_) {
       messenger.hideCurrentSnackBar();
-      messenger.showSnackBar(const SnackBar(
-          content: Text("Couldn't download the session. Try again.")));
+      messenger.showSnackBar(
+          const SnackBar(content: Text("Couldn't download it. Try again.")));
     } finally {
       // Left the screen part way: don't leave the progress up.
       if (!mounted) messenger.hideCurrentSnackBar();
@@ -1919,8 +1943,9 @@ class _WatchScreenState extends State<WatchScreen> {
     }
   }
 
-  /// The file name the server suggests, e.g. "Stunt practice 2026-10-07.zip".
-  static String? _zipName(String? disposition) {
+  /// The file name the server suggests, e.g. "Stunt practice 2026-10-07.zip"
+  /// or "Stunt practice 2026-10-07 Recording 003.mp4".
+  static String? _fileName(String? disposition) {
     final match = RegExp(r'filename="([^"]+)"').firstMatch(disposition ?? '');
     final name = match?.group(1)?.replaceAll(RegExp(r'[/\\]'), '');
     return name == null || name.isEmpty ? null : name;

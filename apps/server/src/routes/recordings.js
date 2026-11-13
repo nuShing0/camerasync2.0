@@ -7,6 +7,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import archiver from "archiver";
 import { Router } from "express";
 import { pool } from "../db/pool.js";
@@ -391,7 +392,20 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
 // (POST .../exports, see ../recordings/syncedExports.js); until they're
 // ready this answers 409.
 // Without it: each phone's original file, as recorded (not lined up).
+//
+// ?startedAt= narrows either to one recording (what the apps' download
+// button asks for: the recording being watched). Synced, that's the video
+// itself, no zip ("Pyramid 2026-11-12 Recording 015.mp4"), unless a big
+// recording needed several.
 const SYNCED_PARTS = ["grid"];
+
+// Just the recording that started at `startedAt` (?startedAt=), when one is
+// asked for; null when there's no such recording.
+function pickRecording(takes, startedAt) {
+  if (startedAt == null || startedAt === "") return takes;
+  const take = takes.find((t) => t.startedAt === Number(startedAt));
+  return take ? [take] : null;
+}
 
 // "Recording 001", or "Recording 001 (2 of 4)" when it needed several.
 function gridName(take, index, count) {
@@ -411,7 +425,8 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
   try {
     const session = await visibleSession(req.params.id, req.user.id);
     if (!session) return res.status(404).json({ error: "Session not found." });
-    const takes = await sessionTakes(req.params.id);
+    const takes = pickRecording(await sessionTakes(req.params.id), req.query.startedAt);
+    if (!takes) return res.status(404).json({ error: "Recording not found." });
     if (takes.length === 0) {
       return res.status(404).json({ error: "No videos have been uploaded for this session." });
     }
@@ -443,7 +458,26 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
     }
 
     const day = new Date(session.scheduled_at).toISOString().slice(0, 10);
-    const zipName = `${safeName(session.name) || "Session"} ${day}${synced ? " synced" : ""}.zip`;
+    const one = req.query.startedAt ? ` ${gridName(takes[0], 0, 1)}` : "";
+    const base = `${safeName(session.name) || "Session"} ${day}`;
+
+    // One recording, one grid video: the video itself.
+    const grid = synced && takes.length === 1 ? opened[0].grid : null;
+    if (one && grid?.videos.length === 1) {
+      const file = grid.path(grid.videos[0].file);
+      const videoName = `${base}${one}.mp4`;
+      res.set({
+        "Content-Type": "video/mp4",
+        "Content-Length": String((await fs.promises.stat(file)).size),
+        "Content-Disposition":
+          `attachment; filename="${videoName.replace(/"/g, "")}"; filename*=UTF-8''${encodeURIComponent(videoName)}`,
+      });
+      // A cancelled download just ends.
+      await pipeline(fs.createReadStream(file), res).catch(() => res.destroy());
+      return;
+    }
+
+    const zipName = `${base}${one || (synced ? " synced" : "")}.zip`;
     res.set({
       "Content-Type": "application/zip",
       "Content-Disposition":
@@ -512,8 +546,8 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
   }
 });
 
-// Asks for the session's synced download to be made, and says how far along
-// it is: { state: queued|working|ready|failed, progress (0-1), waiting,
+// Asks for the session's synced download (or, with ?startedAt=, one
+// recording's) to be made, and says how far along it is: { state: queued|working|ready|failed, progress (0-1), waiting,
 // error }. Safe to repeat: the apps call it every couple of seconds until
 // it's "ready", then fetch .../download?kind=synced.
 recordingsRouter.post("/sessions/:id/exports", requireAuth, async (req, res, next) => {
@@ -521,7 +555,8 @@ recordingsRouter.post("/sessions/:id/exports", requireAuth, async (req, res, nex
     if (!(await visibleSession(req.params.id, req.user.id))) {
       return res.status(404).json({ error: "Session not found." });
     }
-    const takes = await sessionTakes(req.params.id);
+    const takes = pickRecording(await sessionTakes(req.params.id), req.query.startedAt);
+    if (!takes) return res.status(404).json({ error: "Recording not found." });
     if (takes.length === 0) {
       return res.status(404).json({ error: "No videos have been uploaded for this session." });
     }
