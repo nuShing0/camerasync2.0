@@ -158,7 +158,8 @@ export function ActiveSessionScreen() {
           setGroupName(groups.find((group) => group.id === currentSession.groupId)?.name ?? "");
           setMayControl(
             Number(currentSession.createdBy) === Number(user.id) ||
-            groups.some((group) => group.id === currentSession.groupId && group.role === "admin")
+            groups.some((group) => group.id === currentSession.groupId
+              && (group.role === "admin" || group.role === "owner"))
           );
         }
       })
