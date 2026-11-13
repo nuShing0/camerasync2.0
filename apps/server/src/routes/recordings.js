@@ -247,7 +247,9 @@ recordingsRouter.delete("/sessions/:id/recordings/:startedAt", requireAuth, asyn
 // phone stopped early or filmed the floor), and so can admins and the owner.
 // Not while that recording is being made. Its files go, and its phone, if
 // still uploading it, is turned away (deleted_angles) rather than bringing it
-// back. The recording's other angles and its comments stay.
+// back. The recording's other angles and its comments stay; deleting its
+// last angle deletes the recording, as below (comments too, and every
+// late upload of it turned away).
 recordingsRouter.delete("/sessions/:id/recordings/:startedAt/angles/:userId", requireAuth, async (req, res, next) => {
   const startedAt = Number(req.params.startedAt);
   const userId = Number(req.params.userId);
@@ -288,11 +290,29 @@ recordingsRouter.delete("/sessions/:id/recordings/:startedAt/angles/:userId", re
         WHERE session_id = $1 AND started_at_ms = $2 AND user_id = $3`,
       [req.params.id, startedAt, userId]
     );
+    // The last one: the recording itself is deleted.
+    const { rows: [{ left }] } = await client.query(
+      `SELECT COUNT(*)::int AS left FROM recording_session_videos
+        WHERE session_id = $1 AND started_at_ms = $2`,
+      [req.params.id, startedAt]
+    );
+    const recordingDeleted = left === 0;
+    if (recordingDeleted) {
+      await client.query(
+        `UPDATE session_recordings SET deleted_at = NOW()
+          WHERE session_id = $1 AND started_at_ms = $2`,
+        [req.params.id, startedAt]
+      );
+      await client.query(
+        "DELETE FROM session_notes WHERE session_id = $1 AND started_at_ms = $2",
+        [req.params.id, startedAt]
+      );
+    }
     await client.query("COMMIT");
     // The row is gone first, so nothing points at a missing file.
     await deleteRecordingFiles(storedFileIds(videos)).catch((err) =>
       console.error("Could not delete an angle's files:", err));
-    res.json({ ok: true });
+    res.json({ ok: true, recordingDeleted });
   } catch (err) {
     if (client) await client.query("ROLLBACK").catch(() => {});
     next(err);
