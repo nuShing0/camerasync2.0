@@ -222,7 +222,7 @@ class _SessionScreenState extends State<SessionScreen> {
                 "Every camera stops and they can't record more takes."
           else
             "You'll stop being a camera in this session. You can join "
-                "again with its code.",
+                "again from Sessions.",
           if (midTake) 'A take is recording; it stops on this phone now.',
         ].join('\n\n')),
         actions: [
@@ -309,7 +309,6 @@ class _SessionScreenState extends State<SessionScreen> {
 
     final topBar = _SessionTopBar(
       name: widget.sessionName ?? 'Session ${widget.sessionId}',
-      code: widget.sessionId,
       members: _members,
       clockSynced: socket.clockSynced,
       reconnecting: _reconnecting,
@@ -373,7 +372,6 @@ class _SessionScreenState extends State<SessionScreen> {
 class _SessionTopBar extends StatelessWidget {
   const _SessionTopBar({
     required this.name,
-    required this.code,
     required this.members,
     required this.clockSynced,
     this.reconnecting = false,
@@ -385,8 +383,6 @@ class _SessionTopBar extends StatelessWidget {
 
   final String name;
 
-  /// The session's code, so others can join with it.
-  final String code;
   final List<SessionMember> members;
   final bool clockSynced;
 
@@ -431,10 +427,6 @@ class _SessionTopBar extends StatelessWidget {
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
               ),
-            ),
-            Text(
-              'Code $code',
-              style: const TextStyle(color: Colors.white70, fontSize: 12),
             ),
             if (!reconnecting && !clockSynced)
               const Text(

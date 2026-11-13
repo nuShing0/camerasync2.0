@@ -1,6 +1,8 @@
-// Sessions without a group: anyone signed in can start one and share its
-// code; anyone with the code can join; only the creator and the people who
-// joined can see it. Run against the dev Postgres like the other route tests.
+// Sessions without a group can't be started any more (every session is in a
+// group, whose invite is the one code people share), but the old ones keep
+// working: anyone with the code can join; only the creator and the people
+// who joined can see it. Run against the dev Postgres like the other route
+// tests.
 import "dotenv/config";
 
 import cookieParser from "cookie-parser";
@@ -70,15 +72,27 @@ afterAll(async () => {
 });
 
 describe("sessions without a group", () => {
-  it("can be started by anyone signed in, with no group", async () => {
+  it("can't be started any more", async () => {
     const res = await request(app)
       .post("/api/recordings/sessions/live")
       .set("Cookie", host.cookie)
       .send({ name: "Pickup practice" });
-    expect(res.status).toBe(201);
-    session = res.body.session;
-    expect(session.groupId).toBeNull();
-    expect(session.status).toBe("active");
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/group/);
+  });
+
+  it("from before still show for their host", async () => {
+    // One started back when they could be, as that route did then.
+    const id = `g${RUN}`.slice(-6).replace(/^\d/, "g");
+    await pool.query(
+      `INSERT INTO recording_sessions (id, group_id, name, scheduled_at, created_by, status)
+       VALUES ($1, NULL, 'Pickup practice', NOW(), $2, 'active')`,
+      [id, host.id]
+    );
+    for (const table of ["recording_session_members", "recording_session_participants"]) {
+      await pool.query(`INSERT INTO ${table} (session_id, user_id) VALUES ($1, $2)`, [id, host.id]);
+    }
+    session = { id };
     expect((await listOf(host)).map((s) => s.id)).toContain(session.id);
     expect(await getSessionRole(session.id, host.id)).toBe("owner");
   });
