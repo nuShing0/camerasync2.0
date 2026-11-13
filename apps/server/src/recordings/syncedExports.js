@@ -1,26 +1,22 @@
-// Downloads that come out lined up, like the in-app player.
+// The session download: each take's angles side by side, lined up like the
+// in-app player.
 //
 // Each phone starts recording a moment after the take's shared start, by a
 // different amount each time, so the originals in the plain session zip
 // don't line up. The player fixes that live by skipping each angle ahead by
-// its stored start_offset_ms (see angleTrims.js on the web). This makes
-// files that are already fixed, two ways:
+// its stored start_offset_ms (see angleTrims.js on the web). The grid video
+// does the same: every angle cut to start at the same instant (when the
+// last camera began), running until the last one stopped, as the player
+// does; an angle that stopped early (someone left the app) holds its last
+// frame, as it does in the player. Side by side in one MP4 (several, of up to MAX_PER_GRID angles each, for a big
+// take), built from the 720p previews (see previews.js) to keep it cheap.
+// Being re-encoded anyway, it is cut on the exact frame.
 //
-//   synced  every angle cut to start at the same instant (when the last
-//           camera began) and end together (when the first one stopped),
-//           at full quality: one MP4 per angle.
-//   grid    every angle side by side in one MP4 (several, of up to
-//           MAX_PER_GRID angles each, for a big take), cut the same way,
-//           built from the 720p previews (see previews.js) to keep it cheap.
+// Each angle lined up in its own full-quality file was tried too, and
+// dropped: re-encoding every angle took ~6x the take's length on the
+// t3.small, most of the wait, for files few people need.
 //
-// Why re-encode: a stream copy (-c copy) can only start on a keyframe, and
-// phones put one every 1-2 s, so a copied cut would land up to a couple of
-// seconds off: worse than the drift being fixed. Re-encoding from the
-// decoded frame is exact to the frame. The one angle that started last
-// needs no start cut, so it is copied as it is (cut only at the end, which
-// a copy does fine): one re-encode saved per take.
-//
-// It takes minutes per take on a small server, so it never runs in a
+// It takes a minute or so per take on a small server, so it never runs in a
 // request: a request asks for an export (ensureExports) and gets progress
 // back; the work runs in the background, one take at a time, at low
 // priority; the result is kept on disk (EXPORT_DIR) so the next download is
@@ -47,10 +43,8 @@ const CACHE_MAX_AGE_MS = Number(process.env.EXPORT_CACHE_HOURS || 72) * 3600 * 1
 const FAILURE_MEMORY_MS = 60_000;
 const TIMEOUT_MS = 60 * 60 * 1000;
 
-// Shorter than this together, the angles don't really overlap.
+// Shorter than this from the shared start, there's nothing to show.
 const MIN_SHARED_SECONDS = 0.5;
-// A start cut this small is under a frame: copy instead of re-encoding.
-const COPY_BELOW_SECONDS = 0.02;
 
 // The grid: each cell fits a 16:9 (or 9:16) 640x360 box, the whole frame
 // no bigger than 1920 on its long side.
@@ -64,54 +58,24 @@ export const MAX_PER_GRID = 6;
 
 // --- Planning (pure) -------------------------------------------------------
 
-/// Where each angle is cut so a take lines up: the shared start is when the
-/// last camera began, the shared end when the first one stopped. Offsets are
-/// how much later each camera began than the take's start (ms; unknown counts
-/// as on time, as in the player); durations are each file's length (s).
-/// Returns { skips: seconds to cut from each start, length } or null when the
-/// angles don't overlap.
+/// Where each angle is cut so a take lines up, like the player: the shared
+/// start is when the last camera began, the end when the last one stopped.
+/// Offsets are how much later each camera began than the take's start (ms;
+/// unknown counts as on time, as in the player); durations are each file's
+/// length (s). Returns { skips: seconds to cut from each start, length } or
+/// null when there's (next to) nothing after the shared start.
 export function syncWindow(angles) {
   if (angles.length === 0) return null;
   const offsets = angles.map((angle) => angle.startOffsetMs ?? 0);
   const latest = Math.max(...offsets);
   const skips = offsets.map((offset) => round3((latest - offset) / 1000));
-  const length = round3(Math.min(...angles.map((angle, i) => angle.duration - skips[i])));
+  const length = round3(Math.max(...angles.map((angle, i) => angle.duration - skips[i])));
   if (!Number.isFinite(length) || length < MIN_SHARED_SECONDS) return null;
   return { skips, length };
 }
 
 function round3(value) {
   return Math.round(value * 1000) / 1000;
-}
-
-/// ffmpeg arguments for one angle of a synced take: frame-exact cut by
-/// re-encoding, or a copy when there's nothing to cut at the start (`copy`,
-/// see canCopy).
-export function syncedAngleArgs(input, output, { skip, length, copy = false }) {
-  const head = ["-v", "error", "-nostats", "-progress", "pipe:1", "-y"];
-  if (copy) {
-    return [
-      ...head, "-i", input, "-t", String(length),
-      "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
-      "-movflags", "+faststart", "-f", "mp4", output,
-    ];
-  }
-  return [
-    // -ss before -i seeks fast, and with re-encoding starts at the exact
-    // frame (ffmpeg decodes from the keyframe before and drops the rest).
-    ...head, ...(skip > 0 ? ["-ss", String(skip)] : []), "-i", input, "-t", String(length),
-    "-map", "0:v:0", "-map", "0:a:0?",
-    // Close to the original's quality; veryfast keeps the CPU time down.
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-    "-c:a", "aac", "-b:a", "160k",
-    "-movflags", "+faststart", "-f", "mp4", output,
-  ];
-}
-
-/// Whether an angle can be copied rather than re-encoded: nothing to cut at
-/// the start, and a codec an MP4 holds (a laptop's VP9 WebM gets re-encoded).
-export function canCopy(skip, codec) {
-  return skip < COPY_BELOW_SECONDS && (codec === "h264" || codec === "hevc");
 }
 
 /// Rows and columns for a grid of `count` angles, and each cell's size.
@@ -139,30 +103,41 @@ function even(value) {
   return Math.floor(value / 2) * 2;
 }
 
-/// ffmpeg arguments for the grid video: each angle cut to the shared window,
-/// fitted into its cell (letterboxed, never stretched), stacked with xstack.
-/// Sound comes from one angle (`audioFrom`, an index, or null for none):
-/// mixing every phone's would echo.
+/// ffmpeg arguments for the grid video: each angle started at its skip,
+/// fitted into its cell (letterboxed, never stretched), stacked with xstack,
+/// `length` long; an angle that ends sooner holds its last frame. Sound
+/// comes from one angle (`audioFrom`, an index, or null for none): mixing
+/// every phone's would echo. Silence after it ends.
 export function gridArgs(inputs, output, { skips, length, portrait, audioFrom }) {
   const layout = gridLayout(inputs.length, portrait);
   const args = ["-v", "error", "-nostats", "-progress", "pipe:1", "-y"];
+  // Memory: with ffmpeg's defaults (several threads per input, each holding
+  // frames) a 5-angle grid reached 1.3 GB on the 1.9 GB server and was
+  // killed. One decoding thread per input still decodes them in parallel.
   inputs.forEach((input, i) => {
-    args.push("-ss", String(skips[i]), "-t", String(length), "-i", input);
+    args.push("-threads", "1", "-ss", String(skips[i]), "-i", input);
   });
   const { cellW: w, cellH: h } = layout;
   const fitted = inputs.map((_, i) =>
     `[${i}:v:0]fps=${GRID_FPS},scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
-    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v${i}]`);
+    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,` +
+    // Ended: the last frame, until the grid's end (-t below).
+    `tpad=stop_mode=clone:stop=-1[v${i}]`);
   const stacked = inputs.length === 1
     ? "[v0]null[grid]"
     : `${inputs.map((_, i) => `[v${i}]`).join("")}xstack=inputs=${inputs.length}:` +
       `layout=${layout.cells.map(({ x, y }) => `${x}_${y}`).join("|")}:fill=black[grid]`;
   args.push(
-    "-filter_complex", [...fitted, stacked].join(";"),
+    "-filter_threads", "1",
+    "-filter_complex", [
+      ...fitted,
+      stacked,
+      ...(audioFrom == null ? [] : [`[${audioFrom}:a:0]apad[sound]`]),
+    ].join(";"),
     "-map", "[grid]",
-    ...(audioFrom == null ? [] : ["-map", `${audioFrom}:a:0`]),
+    ...(audioFrom == null ? [] : ["-map", "[sound]"]),
     "-t", String(length),
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-threads", "2",
     ...(audioFrom == null ? [] : ["-c:a", "aac", "-b:a", "128k"]),
     "-movflags", "+faststart", "-f", "mp4", output,
   );
@@ -190,7 +165,7 @@ export function exportKey(kind, take) {
     .map((a) => [a.fileId, a.startOffsetMs ?? null])
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   return crypto.createHash("sha256")
-    .update(JSON.stringify({ v: 2, kind, angles }))
+    .update(JSON.stringify({ v: 4, kind, angles }))
     .digest("hex")
     .slice(0, 32);
 }
@@ -240,11 +215,11 @@ export function runTool(command, args, { onProgress, timeoutMs = TIMEOUT_MS } = 
   });
 }
 
-// Length, codec, upright size and whether there's sound.
+// Length, upright size and whether there's sound.
 async function probeMedia(filePath) {
   const result = await runTool("ffprobe", [
     "-v", "error",
-    "-show_entries", "stream=codec_type,codec_name,width,height:stream_side_data=rotation:format=duration",
+    "-show_entries", "stream=codec_type,width,height:stream_side_data=rotation:format=duration",
     "-of", "json", filePath,
   ], { timeoutMs: 60_000 });
   if (result.missing) throw new ToolMissing();
@@ -256,7 +231,6 @@ async function probeMedia(filePath) {
   const sideways = rotation === 90 || rotation === 270;
   return {
     duration: Number(info.format?.duration ?? 0),
-    codec: video.codec_name,
     width: sideways ? video.height : video.width,
     height: sideways ? video.width : video.height,
     hasAudio: Boolean(info.streams?.some((s) => s.codec_type === "audio")),
@@ -265,7 +239,7 @@ async function probeMedia(filePath) {
 
 class ToolMissing extends Error {
   constructor() {
-    super("This server can't make synced videos (ffmpeg isn't installed).");
+    super("This server can't make lined-up videos (ffmpeg isn't installed).");
   }
 }
 
@@ -396,7 +370,7 @@ export function startExportSweep({ everyMs = 60 * 60 * 1000 } = {}) {
 // --- Jobs ------------------------------------------------------------------
 //
 // One take of one kind is one job. They run one at a time: an export takes
-// the CPU for minutes, and the server also makes previews.
+// the CPU for a while, and the server also makes previews.
 
 const jobs = new Map();
 const queue = [];
@@ -407,7 +381,10 @@ let current = null;
 /// aren't made yet. `take`: { sessionId, startedAt, number, angles: [{
 /// userId, name, fileId, previewFileId, startOffsetMs, syncedBy }] }, angles
 /// with a file. Returns { state: queued|working|ready|failed, progress
-/// (0-1), waiting (other people's jobs ahead), error }.
+/// (0-1), waiting (other people's jobs ahead), error, skipped }. One take
+/// that couldn't be made doesn't hold up the rest: once every job is done,
+/// it's "ready" with `skipped` takes left out (see exportFailure), and
+/// "failed" only when none could be made.
 export async function ensureExports(kinds, takes) {
   const parts = [];
   for (const take of takes) {
@@ -435,24 +412,31 @@ export async function ensureExports(kinds, takes) {
   return summarize(parts);
 }
 
-// Roughly how long a job takes, for the progress bar: re-encoding a
-// full-size angle costs about four times a whole 720p grid.
+// Roughly how long a job takes, for the progress bar.
 function jobWeight(kind, take) {
-  return kind === "grid" ? 1 : 4 * take.angles.length;
+  return take.angles.length;
 }
 
 function summarize(parts) {
-  const failed = parts.find((p) => p.state === "failed");
+  const failed = parts.filter((p) => p.state === "failed");
+  const finished = (p) => p.state === "ready" || p.state === "failed";
   const total = parts.reduce((sum, p) => sum + p.weight, 0);
-  const done = parts.reduce((sum, p) => sum + p.weight * (p.state === "ready" ? 1 : p.fraction), 0);
+  const done = parts.reduce((sum, p) => sum + p.weight * (finished(p) ? 1 : p.fraction), 0);
   return {
-    state: failed ? "failed" : parts.every((p) => p.state === "ready") ? "ready"
-      : parts.some((p) => p.state === "working") ? "working" : "queued",
+    state: failed.length > 0 && failed.length === parts.length ? "failed"
+      : parts.every(finished) ? "ready"
+        : parts.some((p) => p.state === "working") ? "working" : "queued",
     progress: total ? Math.min(1, done / total) : 1,
-    ...(failed ? { error: failed.error } : {}),
+    ...(failed.length > 0 ? { error: failed[0].error, skipped: failed.length } : {}),
     // Other people's downloads being made first.
     waiting: [current, ...queue].filter((job) => job && !parts.includes(job)).length,
   };
+}
+
+/// Why this take's export couldn't be made, if it failed lately; else null.
+export function exportFailure(kind, take) {
+  const job = jobs.get(exportKey(kind, take));
+  return job?.state === "failed" ? job.error : null;
 }
 
 async function drain() {
@@ -463,7 +447,7 @@ async function drain() {
     job.state = "working";
     current = job;
     try {
-      await (job.kind === "grid" ? makeGrid(job) : makeSynced(job));
+      await makeGrid(job);
       jobs.delete(job.key);
     } catch (err) {
       job.state = "failed";
@@ -519,7 +503,7 @@ async function sourcesStillThere(take) {
   return rows[0].n === ids.length;
 }
 
-// Shared by both kinds: the take's sources, probed, and where each is cut.
+// The take's sources, probed, and where each is cut.
 async function plan(job, work, sourceIds) {
   const files = await fetchSources(work, sourceIds);
   const infos = [];
@@ -528,43 +512,8 @@ async function plan(job, work, sourceIds) {
     startOffsetMs: angle.startOffsetMs,
     duration: infos[i].duration,
   })));
-  if (!window) throw userFacing("These angles don't overlap, so they can't be lined up.");
+  if (!window) throw userFacing("These videos are too short to put together.");
   return { files, infos, window };
-}
-
-async function makeSynced(job) {
-  const { take } = job;
-  await withWorkFolder(job, async (work) => {
-    const { files, infos, window } =
-      await plan(job, work, take.angles.map((a) => a.fileId));
-    const total = window.length * take.angles.length;
-    const outputs = [];
-    for (const [i, angle] of take.angles.entries()) {
-      if (job.cancelled) return null;
-      const skip = window.skips[i];
-      const file = `angle-${i}.mp4`;
-      const args = syncedAngleArgs(files[i], path.join(work, file), {
-        skip,
-        length: window.length,
-        copy: canCopy(skip, infos[i].codec),
-      });
-      const result = await runTool("ffmpeg", args, {
-        onProgress: (done) => {
-          job.fraction = Math.min(1, (i * window.length + Math.min(done, window.length)) / total);
-        },
-      });
-      if (result.missing) throw new ToolMissing();
-      if (!result.ok) throw new Error(result.err.trim().split("\n").pop() || "ffmpeg failed");
-      await fsp.rm(files[i], { force: true });
-      outputs.push({ name: angle.name, file, skip, syncedBy: angle.syncedBy ?? null });
-    }
-    return {
-      kind: "synced",
-      length: window.length,
-      angles: outputs,
-      sources: take.angles.map((a) => a.fileId),
-    };
-  });
 }
 
 async function makeGrid(job) {
@@ -574,7 +523,7 @@ async function makeGrid(job) {
   await withWorkFolder(job, async (work) => {
     // The preview has the original's timeline, so the same offsets apply.
     // Every grid video of a take shares one window, so they line up with
-    // each other and with the synced angles.
+    // each other.
     const { files, infos, window } =
       await plan(job, work, take.angles.map((a) => a.previewFileId || a.fileId));
     const groups = gridGroups(take.angles.length);
@@ -583,10 +532,15 @@ async function makeGrid(job) {
       if (job.cancelled) return null;
       const portrait =
         group.filter((i) => infos[i].height > infos[i].width).length > group.length / 2;
-      const audioFrom = group.findIndex((i) => infos[i].hasAudio);
+      // Sound from the angle that runs longest (the first of those).
+      const runs = (i) => infos[i].duration - window.skips[i];
+      const audioFrom = group.reduce((best, i, at) => (infos[i].hasAudio
+        && (best === -1 || runs(i) > runs(group[best]) + 0.5) ? at : best), -1);
       const file = `grid-${g + 1}.mp4`;
       const { args } = gridArgs(group.map((i) => files[i]), path.join(work, file), {
-        skips: group.map((i) => window.skips[i]),
+        // One that stopped before the shared start shows its last frame,
+        // as in the player.
+        skips: group.map((i) => Math.min(window.skips[i], Math.max(0, round3(infos[i].duration - 0.1)))),
         length: window.length,
         portrait,
         audioFrom: audioFrom === -1 ? null : audioFrom,
@@ -600,9 +554,19 @@ async function makeGrid(job) {
       if (!result.ok) throw new Error(result.err.trim().split("\n").pop() || "ffmpeg failed");
       videos.push({ file, angles: group.map((i) => take.angles[i].name) });
     }
+    // Only the grid videos are kept.
+    for (const file of files) await fsp.rm(file, { force: true });
     return {
       kind: "grid",
       length: window.length,
+      // When each angle stopped, from the shared start (s).
+      ends: take.angles.map((_, i) => round3(Math.max(0, infos[i].duration - window.skips[i]))),
+      // How each angle was cut, for the note in the zip.
+      angles: take.angles.map((angle, i) => ({
+        name: angle.name,
+        skip: window.skips[i],
+        syncedBy: angle.syncedBy ?? null,
+      })),
       videos,
       sources: take.angles.flatMap((a) => [a.fileId, a.previewFileId].filter(Boolean)),
     };

@@ -28,7 +28,9 @@ import { deleteRecordingFiles, storedFileIds } from "./file.js";
 import { ensureRecordingNumber, isRecordingDeleted } from "../recordings/numbering.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { STAGES, progressFor, reportProgress } from "../recordings/uploadProgress.js";
-import { MAX_PER_GRID, ensureExports, openExport } from "../recordings/syncedExports.js";
+import {
+  MAX_PER_GRID, ensureExports, exportFailure, openExport,
+} from "../recordings/syncedExports.js";
 
 export const recordingsRouter = Router();
 const SESSION_ID_CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -382,18 +384,19 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
 // angle named after them. Stored, not compressed: video is already
 // compressed, so the zip starts streaming at once and costs no CPU.
 //
-// With ?kind=synced (what the apps' download button asks for) every angle
-// is trimmed to start and end together, like the player, and each folder
-// also has "All angles.mp4", every angle side by side in one video. Those
-// are made in the background first (POST .../exports, see
-// ../recordings/syncedExports.js); until they're ready this answers 409.
+// With ?kind=synced (what the apps' download button asks for) it's instead
+// one video per recording with every angle side by side, lined up like the
+// player: "Recording 001.mp4" ("Recording 001 (2 of 4).mp4" when a big
+// recording needed several). Those are made in the background first
+// (POST .../exports, see ../recordings/syncedExports.js); until they're
+// ready this answers 409.
 // Without it: each phone's original file, as recorded (not lined up).
-const SYNCED_PARTS = ["synced", "grid"];
-const GRID_NAME = "All angles";
+const SYNCED_PARTS = ["grid"];
 
-// "All angles", or "All angles 2 of 4" when a recording needed several.
-function gridName(index, count) {
-  return count === 1 ? GRID_NAME : `${GRID_NAME} ${index + 1} of ${count}`;
+// "Recording 001", or "Recording 001 (2 of 4)" when it needed several.
+function gridName(take, index, count) {
+  const name = `Recording ${String(take.number).padStart(3, "0")}`;
+  return count === 1 ? name : `${name} (${index + 1} of ${count})`;
 }
 
 recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, next) => {
@@ -402,7 +405,7 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
     return res.status(400).json({ error: "Unknown download kind." });
   }
   const synced = kind === "synced";
-  // Per recording: { synced, grid } finished exports, held until sent.
+  // Per recording: { grid } finished exports, held until sent.
   const opened = [];
   let archive;
   try {
@@ -424,7 +427,18 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
       }
       if (opened.some((parts) => SYNCED_PARTS.some((part) => !parts[part]))) {
         const status = await ensureExports(SYNCED_PARTS, takes);
-        return res.status(409).json({ error: "This download is still being made.", status });
+        if (status.state !== "ready") {
+          return res.status(409).json({ error: "This download is still being made.", status });
+        }
+        // Everything's done, but some takes couldn't be made: send the rest
+        // (the note says which are missing). One may have finished since.
+        for (const [t, take] of takes.entries()) {
+          for (const part of SYNCED_PARTS) {
+            if (opened[t][part]) continue;
+            const ready = await openExport(part, take);
+            if (ready) opened[t][part] = ready;
+          }
+        }
       }
     }
 
@@ -454,7 +468,24 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
       archive.append(stream, { name, date });
       await added;
     };
-    for (const [t, take] of takes.entries()) {
+    if (synced) {
+      const used = new Set();
+      for (const [t, take] of takes.entries()) {
+        const { grid } = opened[t];
+        if (!grid) continue;
+        const date = new Date(take.startedAt);
+        for (const [g, video] of grid.videos.entries()) {
+          let name = `${gridName(take, g, grid.videos.length)}.mp4`;
+          for (let n = 2; used.has(name); n += 1) {
+            name = `${gridName(take, g, grid.videos.length)} (${n}).mp4`;
+          }
+          used.add(name);
+          await add(fs.createReadStream(grid.path(video.file)), name, date);
+        }
+      }
+      archive.append(syncedReadme(takes, opened), { name: "About these videos.txt" });
+    }
+    for (const take of synced ? [] : takes) {
       const folder = `Recording ${String(take.number).padStart(3, "0")}`;
       const date = new Date(take.startedAt);
       const used = new Set();
@@ -464,25 +495,10 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
         used.add(name);
         return name;
       };
-      if (synced) {
-        const { grid } = opened[t];
-        for (const [g, video] of grid.videos.entries()) {
-          await add(fs.createReadStream(grid.path(video.file)),
-            named(gridName(g, grid.videos.length), ".mp4"), date);
-        }
-      }
-      for (const [a, angle] of take.angles.entries()) {
+      for (const angle of take.angles) {
         const base = safeName(angle.name) || "Member";
-        if (synced) {
-          const ready = opened[t].synced;
-          await add(fs.createReadStream(ready.path(ready.angles[a].file)), named(base, ".mp4"), date);
-        } else {
-          await add(await storage.open(angle.fileId), named(base, path.extname(angle.fileId)), date);
-        }
+        await add(await storage.open(angle.fileId), named(base, path.extname(angle.fileId)), date);
       }
-    }
-    if (synced) {
-      archive.append(syncedReadme(takes, opened), { name: "About these videos.txt" });
     }
     await archive.finalize();
   } catch (err) {
@@ -576,25 +592,32 @@ const SYNCED_BY = {
   beep: "sync beep",
 };
 
-// A note in the synced zip: how each angle was lined up.
+// A note in the zip: how each angle was lined up.
 function syncedReadme(takes, opened) {
   const lines = [
-    "Every video in a recording's folder starts at the same moment and runs the same length,",
-    `lined up the same way as the 8Kount player. "${GRID_NAME}.mp4" shows every angle side by side`,
-    `(a big recording has several, up to ${MAX_PER_GRID} angles each).`,
+    "Each video shows every angle of one recording side by side, lined up the same way as the",
+    "8Kount player: they all start at the same moment, and a phone that stopped early stays on",
+    `its last frame. A big recording is split across several videos, up to ${MAX_PER_GRID} angles each.`,
     "",
   ];
   for (const [t, take] of takes.entries()) {
-    const { synced } = opened[t];
-    lines.push(`Recording ${String(take.number).padStart(3, "0")} (${formatSeconds(synced.length)})`);
-    for (const angle of synced.angles) {
-      const how = SYNCED_BY[angle.syncedBy] ?? "not measured, kept as recorded";
-      lines.push(`  ${angle.name}: ${angle.skip.toFixed(3)} s trimmed from the start (${how})`);
+    const { grid } = opened[t];
+    const recording = `Recording ${String(take.number).padStart(3, "0")}`;
+    if (!grid) {
+      const why = exportFailure("grid", take) ?? "it couldn't be made";
+      lines.push(`${recording}: not included. ${why}`);
+      continue;
     }
-    const { videos } = opened[t].grid;
-    if (videos.length > 1) {
-      for (const [g, video] of videos.entries()) {
-        lines.push(`  ${gridName(g, videos.length)}: ${video.angles.join(", ")}`);
+    lines.push(`${recording} (${formatSeconds(grid.length)})`);
+    for (const [a, angle] of grid.angles.entries()) {
+      const how = SYNCED_BY[angle.syncedBy] ?? "not measured, kept as recorded";
+      const end = grid.ends?.[a];
+      const stopped = end != null && end < grid.length - 1 ? `; stopped at ${formatSeconds(end)}` : "";
+      lines.push(`  ${angle.name}: ${angle.skip.toFixed(3)} s trimmed from the start (${how})${stopped}`);
+    }
+    if (grid.videos.length > 1) {
+      for (const [g, video] of grid.videos.entries()) {
+        lines.push(`  ${gridName(take, g, grid.videos.length)}: ${video.angles.join(", ")}`);
       }
     }
   }
