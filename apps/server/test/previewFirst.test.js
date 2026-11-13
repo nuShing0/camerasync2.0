@@ -231,6 +231,47 @@ describe("preview first", () => {
       .set("Cookie", cookie)).status).toBe(404);
   });
 
+  it("deletes one angle, and turns away a late upload of it", async () => {
+    if (!hasFfmpeg) return;
+    const startedAt = Date.now() - 7_000;
+    expect((await upload(full, startedAt)).status).toBe(201);
+    const take = async () => (await request(app)
+      .get(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie)).body.recordings.find((r) => r.startedAt === startedAt);
+    const me = (await take()).videos[0];
+    // Whoever recorded it may delete it (and here they're the owner, too).
+    expect(me.canDelete).toBe(true);
+
+    expect((await request(app).post(`/api/recordings/sessions/${sessionId}/notes`)
+      .set("Cookie", cookie).send({ body: "Nice", startedAt, videoTimeMs: 0 })).status).toBe(201);
+
+    const path = `/api/recordings/sessions/${sessionId}/recordings/${startedAt}/angles/${me.userId}`;
+    expect((await request(app).delete(path)).status).toBe(401);
+    const res = await request(app).delete(path).set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    // The only angle, so the recording is deleted too: gone from the list,
+    // marked deleted (no late upload brings it back, from anyone), and its
+    // comments gone.
+    expect(res.body.recordingDeleted).toBe(true);
+    expect(await take()).toBeUndefined();
+    const marked = await pool.query(
+      "SELECT deleted_at FROM session_recordings WHERE session_id = $1 AND started_at_ms = $2",
+      [sessionId, startedAt]);
+    expect(marked.rows[0].deleted_at).not.toBeNull();
+    const notes = await pool.query(
+      "SELECT 1 FROM session_notes WHERE session_id = $1 AND started_at_ms = $2",
+      [sessionId, startedAt]);
+    expect(notes.rowCount).toBe(0);
+
+    // Their phone, still sending it, can't bring it back.
+    expect((await upload(full, startedAt)).status).toBe(410);
+    expect((await request(app).post(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie).send({ startedAt })).status).toBe(410);
+    expect(await take()).toBeUndefined();
+    // Twice is not found.
+    expect((await request(app).delete(path).set("Cookie", cookie)).status).toBe(404);
+  });
+
   it("ignores a preview that arrives after the full video", async () => {
     if (!hasFfmpeg) return;
     const startedAt = Date.now() - 4_000;

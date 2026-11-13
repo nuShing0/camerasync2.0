@@ -180,7 +180,14 @@ void main() {
     expect(find.textContaining('Mine', findRichText: true), findsOneWidget);
     expect(find.byTooltip('Delete comment'), findsOneWidget);
 
+    // It asks first: Cancel keeps it...
     await tapAndWait(tester, find.byTooltip('Delete comment'));
+    expect(find.text('Delete this comment?'), findsOneWidget);
+    await tapAndWait(tester, find.text('Cancel'));
+    expect(find.textContaining('Mine', findRichText: true), findsOneWidget);
+    // ...and Delete deletes it.
+    await tapAndWait(tester, find.byTooltip('Delete comment'));
+    await tapAndWait(tester, find.text('Delete'));
     expect(find.textContaining('Mine', findRichText: true), findsNothing);
     expect(notes.map((n) => n['id']), [1]);
   });

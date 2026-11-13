@@ -496,6 +496,98 @@ class _WatchScreenState extends State<WatchScreen> {
     await _syncPlayers(keepSources: _midTake);
   }
 
+  /// What the delete button offers in a recording: each angle the viewer
+  /// may delete (theirs, or any for an admin), and for admins the whole
+  /// recording. With one choice it goes straight to asking.
+  Future<void> _deleteMenu() async {
+    final recording = _recording;
+    if (recording == null) return;
+    final me = widget.auth.user?.id;
+    final angles = [
+      for (final v in recording.videos)
+        if (v.canDelete) v
+    ];
+    final whole = _videos?.canDelete ?? false;
+    String label(AngleVideo v) =>
+        v.userId == me ? 'Delete your angle' : "Delete ${v.name}'s angle";
+    if (!whole && angles.length == 1) return _deleteAngle(angles.first);
+    final choice = await showModalBottomSheet<Object>(
+      context: context,
+      backgroundColor: kSurface,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final v in angles)
+              ListTile(
+                leading: const Icon(Icons.videocam_off_outlined,
+                    color: Color(0xFFE5484D)),
+                title: Text(label(v)),
+                onTap: () => Navigator.of(context).pop(v),
+              ),
+            if (whole)
+              ListTile(
+                leading:
+                    const Icon(Icons.delete_outline, color: Color(0xFFE5484D)),
+                title: const Text('Delete the whole recording'),
+                subtitle: const Text('Every angle and its comments'),
+                onTap: () => Navigator.of(context).pop('recording'),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (choice is AngleVideo) await _deleteAngle(choice);
+    if (choice == 'recording') await _deleteRecording();
+  }
+
+  /// Deletes one angle of the open recording (after asking); the others and
+  /// the comments stay.
+  Future<void> _deleteAngle(AngleVideo angle) async {
+    final recording = _recording;
+    if (recording == null) return;
+    final take = 'Recording ${recording.number.toString().padLeft(3, '0')}';
+    final whose = angle.userId == widget.auth.user?.id
+        ? 'your angle'
+        : "${angle.name}'s angle";
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Delete $whose of $take?'),
+        content: const Text(
+            "The other angles and the comments stay. This can't be undone."),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style:
+                TextButton.styleFrom(foregroundColor: const Color(0xFFE5484D)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
+    try {
+      await _closeAllPlayers();
+      await _recordings.deleteAngle(
+          widget.session.id, recording.startedAtMs, angle.userId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('${whose[0].toUpperCase()}${whose.substring(1)} '
+              'deleted')));
+      await _load();
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+      await _openRecording();
+    }
+  }
+
   /// Deletes the open recording (after asking), then reloads the session.
   Future<void> _deleteRecording() async {
     final recording = _recording;
@@ -1325,10 +1417,15 @@ class _WatchScreenState extends State<WatchScreen> {
               ),
             ),
           ),
-          if (_recording != null && (_videos?.canDelete ?? false))
+          // Inside a recording only (not on the list of them): the whole
+          // recording (admins), or an angle the viewer may delete.
+          if (!_picking &&
+              _recording != null &&
+              ((_videos?.canDelete ?? false) ||
+                  _recording!.videos.any((v) => v.canDelete)))
             IconButton(
-              onPressed: _deleteRecording,
-              tooltip: 'Delete this recording',
+              onPressed: _deleteMenu,
+              tooltip: 'Delete',
               color: const Color(0xFFE5484D),
               icon: const Icon(Icons.delete_outline, size: 24),
             ),
@@ -2078,6 +2175,24 @@ class _WatchScreenState extends State<WatchScreen> {
     SessionRecording recording,
     SessionNote note,
   ) async {
+    final sure = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete this comment?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style:
+                TextButton.styleFrom(foregroundColor: const Color(0xFFE5484D)),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return _notes;
     await _recordings.deleteSessionNote(widget.session.id, note.id);
     final notes = [
       for (final n in _notes)

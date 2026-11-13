@@ -262,6 +262,15 @@ export async function deleteSession(id) {
 
 // Deletes one recording of a session (every angle, and its comments).
 // Admins only.
+// Deletes one angle of a recording (`userId`'s): theirs to delete, or an
+// admin's. The recording's other angles and comments stay.
+export async function deleteAngle(id, startedAt, userId) {
+  await request(
+    `/api/recordings/sessions/${encodeURIComponent(id)}/recordings/${startedAt}/angles/${userId}`,
+    { method: "DELETE" }
+  );
+}
+
 export async function deleteRecording(id, startedAt) {
   await request(
     `/api/recordings/sessions/${encodeURIComponent(id)}/recordings/${startedAt}`,

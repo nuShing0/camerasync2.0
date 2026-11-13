@@ -15,7 +15,7 @@ import { pool } from "../db/pool.js";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { atLeast, getSessionRole, sessionVisibleSql } from "../middleware/groupRole.js";
 import { storage } from "../storage/index.js";
-import { ensureRecordingNumber, isRecordingDeleted } from "../recordings/numbering.js";
+import { ensureRecordingNumber, isAngleDeleted, isRecordingDeleted } from "../recordings/numbering.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { remuxForStreaming } from "../recordings/remux.js";
 import { queuePreview } from "../recordings/previews.js";
@@ -263,6 +263,9 @@ async function checkUploader(req, res, next) {
     // Deleted while this device was still sending it.
     if (await isRecordingDeleted(req.query.sessionId, startedAt)) {
       return res.status(410).json({ error: "This recording was deleted." });
+    }
+    if (await isAngleDeleted(req.query.sessionId, startedAt, req.user.id)) {
+      return res.status(410).json({ error: "This angle was deleted." });
     }
     next();
   } catch (err) {
