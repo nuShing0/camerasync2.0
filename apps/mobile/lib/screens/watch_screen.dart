@@ -581,6 +581,10 @@ class _WatchScreenState extends State<WatchScreen> {
       _notes = [];
       _focused = null;
       _selected = uploaded.isEmpty ? 0 : uploaded.first;
+      // The first angle's sound on to start, as on the website.
+      _heard
+        ..clear()
+        ..addAll(uploaded.take(1));
       _trims = recording == null ? {} : angleTrims(recording.videos);
     });
     if (recording == null) return;
@@ -760,15 +764,27 @@ class _WatchScreenState extends State<WatchScreen> {
     }
   }
 
-  /// Plays one angle's sound, the one being watched (expanded in the grid,
-  /// picked, or the big one upright), and mutes the rest: every phone's at
-  /// once was loud and echoed. As on the website and the TV.
+  /// The angles whose sound plays in the grid, as on the website: each
+  /// angle has a speaker button, and the first one's on to start. (Every
+  /// phone's at once was loud and echoed.)
+  final Set<int> _heard = {};
+
+  /// Sets each player's sound: in the grid, the angles turned on with their
+  /// speaker buttons; upright, the one big angle.
   void _applySound() {
-    var heard = _focused ?? _selected;
-    if (!_players.containsKey(heard)) heard = _players.keys.firstOrNull ?? -1;
     for (final entry in _players.entries) {
-      entry.value.setVolume(entry.key == heard ? 1 : 0);
+      final on =
+          _gridMode ? _heard.contains(entry.key) : entry.key == _selected;
+      entry.value.setVolume(on ? 1 : 0);
     }
+  }
+
+  /// A speaker button in the grid: turns angle [i]'s sound on or off.
+  void _toggleSound(int i) {
+    setState(() {
+      if (!_heard.remove(i)) _heard.add(i);
+    });
+    _applySound();
   }
 
   Future<void> _selectAngle(int i) async {
@@ -1633,6 +1649,28 @@ class _WatchScreenState extends State<WatchScreen> {
                     ),
                   ),
                 ),
+              // Each angle's sound on or off, as on the website.
+              for (var k = 0; k < rects.length; k++)
+                if (_players[angles[k]] != null)
+                  Positioned(
+                    left: rects[k].right - 44,
+                    top: rects[k].bottom - 44,
+                    child: IconButton(
+                      onPressed: () => _toggleSound(angles[k]),
+                      tooltip: _heard.contains(angles[k])
+                          ? 'Mute ${recording.videos[angles[k]].name}'
+                          : 'Hear ${recording.videos[angles[k]].name}',
+                      icon: Icon(
+                        _heard.contains(angles[k])
+                            ? Icons.volume_up
+                            : Icons.volume_off,
+                        color: Colors.white,
+                        shadows: const [
+                          Shadow(blurRadius: 6, color: Colors.black)
+                        ],
+                      ),
+                    ),
+                  ),
               if (focused != null && rects.isNotEmpty)
                 Positioned(
                   top: rects.first.top + 6,
