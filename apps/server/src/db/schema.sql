@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS users (
     profile_picture TEXT,
     roles       JSON NOT NULL DEFAULT '[]',
     password    TEXT NOT NULL,
-    organizations JSON DEFAULT NULL,
     settings JSON NOT NULL DEFAULT '{}',
     agreements JSON NOT NULL DEFAULT '[]'
 );
@@ -22,6 +21,30 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- Every authenticated request looks a session up by its cookie value, so this
 -- index keeps that lookup from becoming a sequential scan.
 CREATE INDEX IF NOT EXISTS sessions_session_token_idx ON sessions (session_token);
+
+-- Login sessions started out with no key at all. A surrogate id gives every
+-- row an identity (SCRUM-24).
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS id BIGSERIAL PRIMARY KEY;
+
+-- A session belongs to an account and goes with it. Rows left behind by
+-- accounts removed before this constraint existed are cleared first, or
+-- adding it would fail.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'sessions_user_id_fkey'
+  ) THEN
+    DELETE FROM sessions s
+     WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = s.user_id);
+    ALTER TABLE sessions
+      ADD CONSTRAINT sessions_user_id_fkey
+      FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+-- Signing out everywhere, changing a password and deleting an account all
+-- remove sessions by user, and the cascade above looks them up the same way.
+CREATE INDEX IF NOT EXISTS sessions_user_id_idx ON sessions (user_id);
 
 CREATE TABLE IF NOT EXISTS groups (
     group_id VARCHAR(64) PRIMARY KEY,
@@ -57,13 +80,6 @@ ALTER TABLE group_members
 ALTER TABLE group_members
     ADD CONSTRAINT group_members_role_check
     CHECK (role IN ('admin', 'member'));
-
-CREATE TABLE IF NOT EXISTS organizations (
-    org_id VARCHAR(255) PRIMARY KEY,
-    name VARCHAR(64),
-    admins JSON DEFAULT '[]',
-    rec_sessions JSON DEFAULT '[]'
-);
 
 -- stores scheduled and live group sessions
 CREATE TABLE IF NOT EXISTS recording_sessions (
@@ -101,12 +117,6 @@ CREATE TABLE IF NOT EXISTS recording_session_members (
     PRIMARY KEY (session_id, user_id)
 );
 
-CREATE TABLE IF NOT EXISTS videos (
-    recording_uri TEXT,
-    session_id VARCHAR(255),
-    author BIGINT
-);
-
 CREATE TABLE IF NOT EXISTS recordings (
     id uuid PRIMARY KEY,
     name text,
@@ -116,15 +126,6 @@ CREATE TABLE IF NOT EXISTS recordings (
     started_at timestamptz,
     stopped_at timestamptz,
     closed_at timestamptz
-);
-
-CREATE TABLE IF NOT EXISTS posts (
-    post_id     VARCHAR(255) PRIMARY KEY,
-    author      BIGINT NOT NULL,
-    content     TEXT,
-    created_at  TIMESTAMP DEFAULT NOW(),
-    video_meta  JSON,
-    reply       VARCHAR(255)
 );
 
 CREATE TABLE IF NOT EXISTS socket_io (
@@ -285,6 +286,14 @@ CREATE TABLE IF NOT EXISTS group_join_requests (
 -- Group passwords are gone (invites replaced them), and with them the
 -- lockout for wrong ones.
 DROP TABLE IF EXISTS group_join_attempts;
+
+-- Tables and a column from the first prototype that no query ever read or
+-- wrote (SCRUM-24): groups replaced organizations, recording_session_videos
+-- replaced videos, and session_notes replaced posts.
+DROP TABLE IF EXISTS organizations;
+DROP TABLE IF EXISTS videos;
+DROP TABLE IF EXISTS posts;
+ALTER TABLE users DROP COLUMN IF EXISTS organizations;
 
 -- 8kount's yellow is now the design's #EAD217 (it was #ffc72c). Groups still
 -- on the old gold move to the new one so they match the palette.
