@@ -59,15 +59,17 @@ export function PlaybackScreen({ live = null } = {}) {
     return () => { cancelled = true; };
   }, [sessionId]);
 
-  // Deletes the open recording, after asking, and goes back to the list.
-  const deleteThisRecording = async () => {
-    const name = takeName(recording, recordingIndex);
+  // Deletes a recording with every angle, after asking: the open one (then
+  // back to the list), or one from the list (staying there).
+  const removeRecording = async (target, index, fromList) => {
+    const name = takeName(target, index);
     if (!window.confirm(`Delete ${name}? Every angle of it and its comments go too. This can't be undone.`)) return;
     setDeleting(true);
     try {
-      await deleteRecording(sessionId, recording.startedAt);
+      await deleteRecording(sessionId, target.startedAt);
       const data = await getSessionVideos(sessionId);
       setRecordings(data.recordings);
+      if (fromList) return;
       if (live) setLiveChoice(0);
       else navigate(`/watch/${sessionId}`, { replace: true });
     } catch (err) {
@@ -145,7 +147,7 @@ export function PlaybackScreen({ live = null } = {}) {
               <button type="button" className="playback-delete" disabled={deleting}
                 aria-label={`Delete ${takeName(recording, recordingIndex)}`}
                 title={`Delete ${takeName(recording, recordingIndex)}`}
-                onClick={deleteThisRecording}>
+                onClick={() => removeRecording(recording, recordingIndex, false)}>
                 <svg viewBox="0 0 24 24" width="21" height="21" aria-hidden="true">
                   <path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"
                     fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
@@ -168,7 +170,9 @@ export function PlaybackScreen({ live = null } = {}) {
               <p>No videos have been uploaded for this session yet.</p>
             ) : showingList ? (
               <RecordingList sessionId={sessionId} recordings={recordings}
-                onChoose={live ? setLiveChoice : null} />
+                onChoose={live ? setLiveChoice : null}
+                onDelete={canDelete && !deleting
+                  ? (target, index) => removeRecording(target, index, true) : null} />
             ) : (
               <>
                 <SessionPlayer key={`${sessionId}-${recordingIndex}`} recordings={recordings}
@@ -194,8 +198,9 @@ function takeName(recording, index) {
 }
 
 // The session's recordings (takes) as cards: a still from the first angle,
-// the take's name, when it started and how many angles it has.
-function RecordingList({ sessionId, recordings, onChoose }) {
+// the take's name, when it started and how many angles it has. For admins
+// (onDelete), each card has a delete button over its still.
+function RecordingList({ sessionId, recordings, onChoose, onDelete }) {
   return (
     <ul className="recording-list">
       {recordings.map((recording, index) => {
@@ -204,6 +209,17 @@ function RecordingList({ sessionId, recordings, onChoose }) {
         const started = new Date(recording.startedAt);
         return (
           <li key={recording.startedAt}>
+            {onDelete && (
+              <button type="button" className="recording-delete"
+                aria-label={`Delete ${takeName(recording, index)}`}
+                title={`Delete ${takeName(recording, index)}`}
+                onClick={() => onDelete(recording, index)}>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+                  stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+                </svg>
+              </button>
+            )}
             <Link to={`/watch/${sessionId}?recording=${number}`}
               onClick={onChoose ? (event) => { event.preventDefault(); onChoose(number); } : undefined}>
               <span className="recording-still">
@@ -1405,6 +1421,14 @@ const css = `
   .recording-list a { display: flex; flex-direction: column; gap: 4px; color: inherit; text-decoration: none; border-radius: 10px; padding: 8px; }
   .recording-list a:hover, .recording-list a:focus-visible { background: rgba(255,255,255,0.06); }
   .recording-list strong { font-size: 1rem; }
+  .recording-list li { position: relative; }
+  /* Over the card's still, top right; shows while the mouse is over the card. */
+  .recording-delete { position: absolute; top: 16px; right: 16px; z-index: 1; display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: none; border-radius: 50%; background: rgba(0,0,0,0.65); color: #ff8a8d; cursor: pointer; }
+  .recording-delete:hover { background: rgba(0,0,0,0.85); }
+  @media (hover: hover) {
+    .recording-list li .recording-delete { opacity: 0; transition: opacity 0.15s; }
+    .recording-list li:hover .recording-delete, .recording-list li:focus-within .recording-delete { opacity: 1; }
+  }
   .recording-still { position: relative; aspect-ratio: 16 / 9; margin-bottom: 6px; border-radius: 8px; overflow: hidden; background: #1c1c1c; display: flex; align-items: center; justify-content: center; color: #777; font-size: 0.85rem; }
   .recording-still video { width: 100%; height: 100%; object-fit: cover; }
   .recording-meta { color: #999; font-size: 0.85rem; }

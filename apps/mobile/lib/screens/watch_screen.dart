@@ -588,9 +588,10 @@ class _WatchScreenState extends State<WatchScreen> {
     }
   }
 
-  /// Deletes the open recording (after asking), then reloads the session.
-  Future<void> _deleteRecording() async {
-    final recording = _recording;
+  /// Deletes a recording with every angle (after asking), then reloads the
+  /// session: the open one, or [fromList], one held down in the list.
+  Future<void> _deleteRecording([SessionRecording? fromList]) async {
+    final recording = fromList ?? _recording;
     if (recording == null) return;
     final name = 'Recording ${recording.number.toString().padLeft(3, '0')}';
     final sure = await showDialog<bool>(
@@ -625,7 +626,7 @@ class _WatchScreenState extends State<WatchScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(e.message)));
-      await _openRecording();
+      if (fromList == null) await _openRecording();
     }
   }
 
@@ -1141,12 +1142,23 @@ class _WatchScreenState extends State<WatchScreen> {
   Widget _recordingList() {
     final team = TeamAccent.of(context);
     final list = _videos?.recordings ?? const <SessionRecording>[];
+    // Admins (and the owner) can hold a recording to delete all of it.
+    final canDelete = _videos?.canDelete ?? false;
     return Scaffold(
       backgroundColor: kBackground,
       body: SafeArea(
         child: Column(
           children: [
             _header(),
+            if (canDelete)
+              const Padding(
+                padding: EdgeInsets.fromLTRB(21, 0, 21, 8),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Hold a recording to delete it.',
+                      style: TextStyle(color: kMuted, fontSize: 13)),
+                ),
+              ),
             Expanded(
               child: GridView.builder(
                 padding: const EdgeInsets.fromLTRB(21, 4, 21, 21),
@@ -1167,6 +1179,8 @@ class _WatchScreenState extends State<WatchScreen> {
                     child: InkWell(
                       borderRadius: BorderRadius.circular(14),
                       onTap: () => _openTake(i),
+                      onLongPress:
+                          canDelete ? () => _deleteRecording(r) : null,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         child: Row(
