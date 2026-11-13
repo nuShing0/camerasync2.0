@@ -106,8 +106,9 @@ function even(value) {
 /// ffmpeg arguments for the grid video: each angle started at its skip,
 /// fitted into its cell (letterboxed, never stretched), stacked with xstack,
 /// `length` long; an angle that ends sooner holds its last frame. Sound
-/// comes from one angle (`audioFrom`, an index, or null for none): mixing
-/// every phone's would echo. Silence after it ends.
+/// comes from one angle (`audioFrom`, an index, or null for none; see
+/// pickSound): mixing every phone's would echo. Evened out to a normal
+/// loudness; silence after it ends.
 export function gridArgs(inputs, output, { skips, length, portrait, audioFrom }) {
   const layout = gridLayout(inputs.length, portrait);
   const args = ["-v", "error", "-nostats", "-progress", "pipe:1", "-y"];
@@ -132,7 +133,11 @@ export function gridArgs(inputs, output, { skips, length, portrait, audioFrom })
     "-filter_complex", [
       ...fitted,
       stacked,
-      ...(audioFrom == null ? [] : [`[${audioFrom}:a:0]apad[sound]`]),
+      // Evened out to a normal loudness, never clipping; silence after it
+      // ends.
+      ...(audioFrom == null ? [] : [
+        `[${audioFrom}:a:0]loudnorm=I=${TARGET_LUFS}:TP=-1.5:LRA=11,aresample=48000,apad[sound]`,
+      ]),
     ].join(";"),
     "-map", "[grid]",
     ...(audioFrom == null ? [] : ["-map", "[sound]"]),
@@ -142,6 +147,41 @@ export function gridArgs(inputs, output, { skips, length, portrait, audioFrom })
     "-movflags", "+faststart", "-f", "mp4", output,
   );
   return { args, layout };
+}
+
+// Speech and music on a phone sit around here (EBU R128 integrated
+// loudness); the grid's sound is evened out to it.
+const TARGET_LUFS = -16;
+// Louder than this is maxed out the whole way (a mic with its gain stuck
+// up: one laptop recorded at +0.9 LUFS, pure distortion). Quieter than
+// QUIET_LUFS is next to silent (a muted or covered mic).
+const CLIPPED_LUFS = -8;
+const QUIET_LUFS = -40;
+
+/// Whose sound a grid video uses: the host's phone (`host`, an index or
+/// null), as in the player, unless it has none or next to none. Otherwise,
+/// of `angles` ({ hasAudio, run: seconds it runs from the shared start,
+/// loudness: LUFS or null }), the one that sounds best, nearest a normal level and neither distorted nor next to
+/// silent, among those running (nearly) to the end; the first of equals.
+/// Index, or null when none has sound.
+export function pickSound(angles, host = null) {
+  const hosts = host == null ? null : angles[host];
+  if (hosts?.hasAudio && !(hosts.loudness != null && hosts.loudness < QUIET_LUFS)) return host;
+  const longest = Math.max(0, ...angles.map((a) => (a.hasAudio ? a.run : 0)));
+  const usable = angles
+    .map((angle, index) => ({ ...angle, index }))
+    .filter((a) => a.hasAudio);
+  if (usable.length === 0) return null;
+  const toEnd = usable.filter((a) => a.run >= longest * 0.9);
+  const badness = (a) => {
+    if (a.loudness == null || !Number.isFinite(a.loudness)) return 50;
+    const off = Math.abs(a.loudness - TARGET_LUFS);
+    return a.loudness > CLIPPED_LUFS || a.loudness < QUIET_LUFS ? 100 + off : off;
+  };
+  const best = (list) => list.reduce((b, a) => (badness(a) < badness(b) - 0.5 ? a : b));
+  // Running to the end matters less than not being distorted.
+  const pick = best(toEnd);
+  return (badness(pick) >= 100 ? best(usable) : pick).index;
 }
 
 /// Which angles (indexes, in order) go in each grid video: as few videos as
@@ -165,7 +205,7 @@ export function exportKey(kind, take) {
     .map((a) => [a.fileId, a.startOffsetMs ?? null])
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   return crypto.createHash("sha256")
-    .update(JSON.stringify({ v: 4, kind, angles }))
+    .update(JSON.stringify({ v: 5, kind, angles }))
     .digest("hex")
     .slice(0, 32);
 }
@@ -213,6 +253,18 @@ export function runTool(command, args, { onProgress, timeoutMs = TIMEOUT_MS } = 
       resolve({ ok: code === 0, missing: code === 127, out, err });
     });
   });
+}
+
+// How loud a file's sound is overall (EBU R128 integrated loudness, LUFS),
+// or null without sound or a reading. Decodes only the sound: a second or
+// two for a minute of video.
+async function measureLoudness(filePath) {
+  const result = await runTool("ffmpeg", [
+    "-v", "info", "-nostats", "-i", filePath, "-map", "0:a:0", "-vn",
+    "-af", "ebur128=framelog=quiet", "-f", "null", "-",
+  ], { timeoutMs: 120_000 });
+  const match = /I:\s+(-?[\d.]+) LUFS/.exec(result.err.slice(-1500));
+  return result.ok && match ? Number(match[1]) : null;
 }
 
 // Length, upright size and whether there's sound.
@@ -526,16 +578,23 @@ async function makeGrid(job) {
     // each other.
     const { files, infos, window } =
       await plan(job, work, take.angles.map((a) => a.previewFileId || a.fileId));
+    // Which angle sounds best, for each grid video's sound.
+    const loudness = [];
+    for (const [i, file] of files.entries()) {
+      loudness.push(infos[i].hasAudio ? await measureLoudness(file) : null);
+    }
     const groups = gridGroups(take.angles.length);
     const videos = [];
     for (const [g, group] of groups.entries()) {
       if (job.cancelled) return null;
       const portrait =
         group.filter((i) => infos[i].height > infos[i].width).length > group.length / 2;
-      // Sound from the angle that runs longest (the first of those).
-      const runs = (i) => infos[i].duration - window.skips[i];
-      const audioFrom = group.reduce((best, i, at) => (infos[i].hasAudio
-        && (best === -1 || runs(i) > runs(group[best]) + 0.5) ? at : best), -1);
+      const host = group.findIndex((i) => take.angles[i].userId === take.hostUserId);
+      const audioFrom = pickSound(group.map((i) => ({
+        hasAudio: infos[i].hasAudio,
+        run: infos[i].duration - window.skips[i],
+        loudness: loudness[i],
+      })), host === -1 ? null : host);
       const file = `grid-${g + 1}.mp4`;
       const { args } = gridArgs(group.map((i) => files[i]), path.join(work, file), {
         // One that stopped before the shared start shows its last frame,
@@ -543,7 +602,7 @@ async function makeGrid(job) {
         skips: group.map((i) => Math.min(window.skips[i], Math.max(0, round3(infos[i].duration - 0.1)))),
         length: window.length,
         portrait,
-        audioFrom: audioFrom === -1 ? null : audioFrom,
+        audioFrom,
       });
       const result = await runTool("ffmpeg", args, {
         onProgress: (done) => {

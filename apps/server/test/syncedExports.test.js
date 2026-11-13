@@ -11,7 +11,7 @@ process.env.EXPORT_DIR = EXPORT_DIR;
 vi.mock("../src/db/pool.js", () => ({ pool: { query: vi.fn() } }));
 
 const {
-  MAX_PER_GRID, exportKey, gridArgs, gridGroups, gridLayout, openExport,
+  MAX_PER_GRID, exportKey, gridArgs, gridGroups, gridLayout, openExport, pickSound,
   purgeExportsUsing, sweepExports, syncWindow,
 } = await import("../src/recordings/syncedExports.js");
 
@@ -98,7 +98,7 @@ describe("gridArgs", () => {
     const { args } = gridArgs(["a.mp4", "b.mp4"], "grid.mp4", { ...window, skips: [0, 0] });
     const graph = args[args.indexOf("-filter_complex") + 1];
     expect(graph.match(/tpad=stop_mode=clone:stop=-1/g)).toHaveLength(2);
-    expect(graph).toContain("[1:a:0]apad[sound]");
+    expect(graph).toMatch(/\[1:a:0\]loudnorm=I=-16:[^;]*apad\[sound\]/);
   });
 
   it("letterboxes each angle into its cell and stacks them", () => {
@@ -127,6 +127,39 @@ describe("gridArgs", () => {
   it("handles a single angle without xstack", () => {
     const { args } = gridArgs(["a.mp4"], "grid.mp4", { ...window, skips: [0] });
     expect(args[args.indexOf("-filter_complex") + 1]).not.toContain("xstack");
+  });
+});
+
+describe("pickSound", () => {
+  const angle = (loudness, { run = 60, hasAudio = true } = {}) => ({ hasAudio, run, loudness });
+
+  it("skips a phone whose sound is maxed out, or next to silent", () => {
+    // A real take: a laptop at +0.9 LUFS (distorted), two phones near -16,
+    // one nearly silent.
+    expect(pickSound([angle(0.9), angle(-15.9), angle(-16.1), angle(-47.2)])).toBe(1);
+  });
+
+  it("prefers one that runs to the end, unless it's distorted", () => {
+    expect(pickSound([angle(-16, { run: 20 }), angle(-22, { run: 60 })])).toBe(1);
+    expect(pickSound([angle(-16, { run: 20 }), angle(0.5, { run: 60 })])).toBe(0);
+  });
+
+  it("uses the host's phone, as the player does", () => {
+    expect(pickSound([angle(-22), angle(-16), angle(-30)], 2)).toBe(2);
+    // Even a loud one: the grid's sound is evened out anyway.
+    expect(pickSound([angle(0.9), angle(-16)], 0)).toBe(0);
+  });
+
+  it("falls back when the host's phone has no sound, or next to none", () => {
+    expect(pickSound([angle(null, { hasAudio: false }), angle(-16)], 0)).toBe(1);
+    expect(pickSound([angle(-47), angle(-16)], 0)).toBe(1);
+    expect(pickSound([angle(-20), angle(-16)], null)).toBe(1);
+  });
+
+  it("uses any sound there is, and none when there's none", () => {
+    expect(pickSound([angle(null, { hasAudio: false }), angle(null)])).toBe(1);
+    expect(pickSound([angle(null, { hasAudio: false })])).toBeNull();
+    expect(pickSound([angle(-3)])).toBe(0);
   });
 });
 

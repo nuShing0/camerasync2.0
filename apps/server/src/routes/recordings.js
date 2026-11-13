@@ -581,9 +581,10 @@ async function sessionTakes(sessionId) {
   const { rows } = await pool.query(
     `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id,
             v.start_offset_ms, v.start_offset_source,
-            u.display_name, sr.recording_number
+            u.display_name, sr.recording_number, rs.created_by
        FROM recording_session_videos v
        JOIN users u ON u.user_id = v.user_id
+       JOIN recording_sessions rs ON rs.id = v.session_id
        LEFT JOIN session_recordings sr
          ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
       WHERE v.session_id = $1 AND v.file_id IS NOT NULL
@@ -599,6 +600,8 @@ async function sessionTakes(sessionId) {
         sessionId,
         startedAt: at,
         number: row.recording_number == null ? takes.length + 1 : Number(row.recording_number),
+        // The host's phone is the sound in the grid video, as in the player.
+        hostUserId: row.created_by == null ? null : Number(row.created_by),
         angles: [],
       };
       takes.push(take);
