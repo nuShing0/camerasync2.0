@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { cameraProblem } from "../recording/cameraProblem.js";
 
 // The room as it sounds. Browsers default to call processing that cancels
 // sound from this computer's own speakers, dulls music and pumps the volume.
@@ -45,7 +46,13 @@ async function alreadyAllowed() {
 // prompt). The preview fills its box, with the camera's name on a chip and a
 // settings button for picking the camera and microphone; `children` (the
 // session's own controls) sit over the video too.
-export function LocalMediaPreview({ disabled, onReady, onDecline, children }) {
+//
+// When the camera can't start (another app such as Zoom has it, the browser
+// blocks it, there's none) or stops partway, it says why and offers to try
+// again, or `onControlOnly` (to run the session from here without
+// recording) when given. It never leaves the session on its own; only
+// Decline on the first prompt does.
+export function LocalMediaPreview({ disabled, onReady, onDecline, onControlOnly, children }) {
   const videoRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -57,10 +64,29 @@ export function LocalMediaPreview({ disabled, onReady, onDecline, children }) {
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Why the camera isn't on, when it couldn't start or stopped: { kind, message }.
+  const [failure, setFailure] = useState(null);
 
   // puts the current stream in the local preview
   useEffect(() => {
     if (videoRef.current) videoRef.current.srcObject = stream;
+  }, [stream]);
+
+  // The camera or microphone stopping by itself (another app took it, it
+  // was unplugged): say so, rather than sit on a frozen picture.
+  useEffect(() => {
+    if (!stream) return undefined;
+    const lost = () => {
+      setFailure({
+        kind: "lost",
+        message: "Your camera or microphone stopped. Another app may have taken it, "
+          + "or it was unplugged. Close it there, then try again.",
+      });
+      setStream(null);
+    };
+    const tracks = stream.getTracks();
+    tracks.forEach((track) => track.addEventListener("ended", lost));
+    return () => tracks.forEach((track) => track.removeEventListener("ended", lost));
   }, [stream]);
 
   // turns off old camera and microphone tracks
@@ -105,14 +131,19 @@ export function LocalMediaPreview({ disabled, onReady, onDecline, children }) {
       setMicrophoneId(nextMicrophoneId);
       if (!firstRequest) saveDevices(nextCameraId, nextMicrophoneId);
       setAccepted(true);
+      setFailure(null);
       onReady(nextStream);
-    } catch {
-      if (firstRequest) {
-        await onDecline();
+    } catch (err) {
+      const problem = cameraProblem(err);
+      // Starting (or starting again): say why, with a way forward. This
+      // used to count as declining, which for the host ended the session.
+      if (firstRequest || !stream) {
+        setFailure(problem);
         return;
       }
 
-      setError("Unable to switch to that device.");
+      // Switching devices: the one already on keeps going.
+      setError(problem.kind === "other" ? "Unable to switch to that device." : problem.message);
     } finally {
       setRequesting(false);
     }
@@ -160,6 +191,35 @@ export function LocalMediaPreview({ disabled, onReady, onDecline, children }) {
 
   if (!accepted && checking) {
     return <p className="local-media-note">Starting camera…</p>;
+  }
+
+  if (failure) {
+    const tryAgain = () => (accepted
+      ? getMedia(cameraId, microphoneId)
+      : accept());
+    return (
+      <section className="media-permission media-failure" role="alert">
+        <style>{mediaCss}</style>
+        <h2>{failure.kind === "busy" ? "Your camera is in use" : "Camera unavailable"}</h2>
+        <p>{failure.message}</p>
+        <div>
+          {onControlOnly && (
+            <button type="button" onClick={onControlOnly} disabled={requesting}>
+              Control only
+            </button>
+          )}
+          <button className="media-accept-button" type="button" onClick={tryAgain}
+            disabled={requesting}>
+            {requesting ? "Starting camera..." : "Try again"}
+          </button>
+        </div>
+        {onControlOnly && (
+          <p className="local-media-note">
+            Control only runs the session from here without this device recording.
+          </p>
+        )}
+      </section>
+    );
   }
 
   if (!accepted) {
