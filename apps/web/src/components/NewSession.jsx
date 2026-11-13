@@ -4,11 +4,12 @@ import { useLocation } from "react-router-dom";
 import { SessionScheduler } from "./SessionScheduler.jsx";
 
 // The + New session dialog, opened from the sidebar and from empty states:
-// start a session now, schedule one, or join one with its code.
+// start a session now or schedule one. (Joining is from the session's
+// card: every session is in a group, so there's no session code to type.)
 const NewSessionContext = createContext(() => {});
 
-/// Opens the dialog, on its menu or straight on one form ("create",
-/// "schedule" or "code").
+/// Opens the dialog, on its menu or straight on one form ("create" or
+/// "schedule").
 export function useNewSession() {
   return useContext(NewSessionContext);
 }
@@ -16,7 +17,6 @@ export function useNewSession() {
 const CHOICES = [
   { panel: "create", title: "Start a session now", detail: "Go live and start recording with your team." },
   { panel: "schedule", title: "Schedule a session", detail: "Put one on the calendar for later." },
-  { panel: "code", title: "Join with a code", detail: "Enter the 6-character code someone shared." },
 ];
 
 export function NewSessionProvider({ children }) {

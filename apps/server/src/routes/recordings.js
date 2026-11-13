@@ -841,26 +841,29 @@ recordingsRouter.post("/sessions/live", requireAuth, async (req, res, next) => {
   if (!name) {
     return res.status(400).json({ error: "Session name is required." });
   }
+  // Every session belongs to a group: the group's invite is the one code
+  // people share. (Sessions without a group, joined by their own code, were
+  // dropped as confusing; old ones still work, see the join route.)
+  if (!groupId) {
+    return res.status(400).json({ error: "Choose a group for this session." });
+  }
 
   let client;
   try {
-    // With a group, only its admins and owner start sessions. Without one,
-    // anyone signed in can, and shares the code.
-    if (groupId) {
-      const membership = await pool.query(
-        `SELECT 1
-           FROM group_members
-          WHERE group_id = $1
-            AND user_id = $2
-            AND role = 'admin'`,
-        [groupId, req.user.id]
-      );
+    // Only the group's admins and owner start sessions.
+    const membership = await pool.query(
+      `SELECT 1
+         FROM group_members
+        WHERE group_id = $1
+          AND user_id = $2
+          AND role = 'admin'`,
+      [groupId, req.user.id]
+    );
 
-      if (membership.rowCount === 0) {
-        return res.status(403).json({
-          error: "Only owners and admins can create a session.",
-        });
-      }
+    if (membership.rowCount === 0) {
+      return res.status(403).json({
+        error: "Only owners and admins can create a session.",
+      });
     }
 
     client = await pool.connect();
@@ -878,7 +881,7 @@ recordingsRouter.post("/sessions/live", requireAuth, async (req, res, next) => {
          ON CONFLICT (id) DO NOTHING
          RETURNING id, group_id, name, scheduled_at,
                    created_at, created_by, status`,
-        [id, groupId || null, name, req.user.id]
+        [id, groupId, name, req.user.id]
       );
 
       if (rows.length > 0) {
@@ -958,8 +961,9 @@ recordingsRouter.post(
       const session = rows[0];
       // Joining a session makes this device one of its cameras, which is
       // exactly what a viewer must not be.
-      // Without a group, the code is the invite: anyone signed in who has
-      // it joins as a member.
+      // An old session without a group (they can't be started any more):
+      // its code is the invite, so anyone signed in who has it joins as a
+      // member.
       const joinRole = session.group_id == null
         ? "member"
         : Number(session.owner_id) === Number(req.user.id)

@@ -356,14 +356,13 @@ class RecordingsApi {
         Map<String, dynamic>.from((data as Map)['session'] as Map));
   }
 
-  /// Start a session right now: for a group (its admins and owner), or with
-  /// no [groupId], one anyone can join with its code.
+  /// Start a session right now, for a group (its admins and owner).
   Future<RecordingSession> createLiveSession({
-    String? groupId,
+    required String groupId,
     required String name,
   }) async {
     final data = await _api.post('/api/recordings/sessions/live', {
-      if (groupId != null) 'groupId': groupId,
+      'groupId': groupId,
       'name': name,
     });
     return RecordingSession.fromJson(
