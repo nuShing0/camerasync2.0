@@ -231,6 +231,32 @@ describe("preview first", () => {
       .set("Cookie", cookie)).status).toBe(404);
   });
 
+  it("deletes one angle, and turns away a late upload of it", async () => {
+    if (!hasFfmpeg) return;
+    const startedAt = Date.now() - 7_000;
+    expect((await upload(full, startedAt)).status).toBe(201);
+    const take = async () => (await request(app)
+      .get(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie)).body.recordings.find((r) => r.startedAt === startedAt);
+    const me = (await take()).videos[0];
+    // Whoever recorded it may delete it (and here they're the owner, too).
+    expect(me.canDelete).toBe(true);
+
+    const path = `/api/recordings/sessions/${sessionId}/recordings/${startedAt}/angles/${me.userId}`;
+    expect((await request(app).delete(path)).status).toBe(401);
+    expect((await request(app).delete(path).set("Cookie", cookie)).status).toBe(200);
+    // The only angle, so the recording is gone from the list.
+    expect(await take()).toBeUndefined();
+
+    // Their phone, still sending it, can't bring it back.
+    expect((await upload(full, startedAt)).status).toBe(410);
+    expect((await request(app).post(`/api/recordings/sessions/${sessionId}/videos`)
+      .set("Cookie", cookie).send({ startedAt })).status).toBe(410);
+    expect(await take()).toBeUndefined();
+    // Twice is not found.
+    expect((await request(app).delete(path).set("Cookie", cookie)).status).toBe(404);
+  });
+
   it("ignores a preview that arrives after the full video", async () => {
     if (!hasFfmpeg) return;
     const startedAt = Date.now() - 4_000;

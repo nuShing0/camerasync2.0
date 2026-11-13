@@ -88,6 +88,7 @@ class AngleVideo {
     this.takeStartedAtMs,
     this.upload,
     this.scrub,
+    this.canDelete = false,
   });
 
   final int userId;
@@ -114,6 +115,10 @@ class AngleVideo {
   /// Stills shown while the seek bar is dragged; null until the server has
   /// made them.
   final ScrubStills? scrub;
+
+  /// This viewer may delete this one angle: they recorded it, or they're an
+  /// admin.
+  final bool canDelete;
 
   /// Shown as on its way for this long after the take.
   static const uploadWait = Duration(minutes: 30);
@@ -148,6 +153,7 @@ class AngleVideo {
         scrub: json['scrub'] is Map
             ? ScrubStills.fromJson(Map<String, dynamic>.from(json['scrub']))
             : null,
+        canDelete: json['canDelete'] == true,
       );
 }
 
@@ -429,6 +435,13 @@ class RecordingsApi {
       'body': body,
       'videoTimeMs': videoTimeMs,
     });
+  }
+
+  /// Deletes one angle of a recording ([userId]'s): whoever recorded it,
+  /// or an admin. The other angles and the comments stay.
+  Future<void> deleteAngle(String id, int startedAtMs, int userId) async {
+    await _api.delete(
+        '/api/recordings/sessions/$id/recordings/$startedAtMs/angles/$userId');
   }
 
   /// Deletes one recording of a session: every angle, and its comments.

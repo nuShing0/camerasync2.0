@@ -42,6 +42,19 @@ export async function ensureRecordingNumber(sessionId, startedAtMs) {
 }
 
 /**
+ * Whether `userId`'s angle of the recording at `startedAtMs` was deleted on
+ * its own (see deleted_angles), so their phone's late upload is turned away.
+ */
+export async function isAngleDeleted(sessionId, startedAtMs, userId) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM deleted_angles
+      WHERE session_id = $1 AND started_at_ms = $2 AND user_id = $3`,
+    [sessionId, startedAtMs, userId]
+  );
+  return rows.length > 0;
+}
+
+/**
  * Whether the recording at `startedAtMs` in `sessionId` was deleted. Its
  * number stays taken (so later recordings keep theirs) and marked, so a
  * device still uploading it is turned away rather than bringing it back.

@@ -396,6 +396,18 @@ BEGIN
   END IF;
 END $$;
 
+-- One angle of a recording that was deleted (by whoever recorded it, or an
+-- admin). Kept so a phone still uploading that angle is turned away rather
+-- than bringing it back; it goes with its session.
+CREATE TABLE IF NOT EXISTS deleted_angles (
+    session_id VARCHAR(6) NOT NULL
+        REFERENCES recording_sessions(id) ON DELETE CASCADE,
+    started_at_ms BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    deleted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (session_id, started_at_ms, user_id)
+);
+
 -- Tables from early plans that nothing uses (an organization, posts and video
 -- list, the first recordings flow, and a socket table the Socket.IO adapter
 -- never touches; it uses socket_io_attachments).

@@ -5,6 +5,7 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom"
 import { useAuth } from "../auth/AuthContext.jsx";
 import {
   createSessionNote,
+  deleteAngle,
   deleteSessionNote,
   getSessionNotes,
   deleteRecording,
@@ -279,6 +280,23 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   const playingRef = useRef(false);
   playingRef.current = playing;
   const videos = recordings[recordingIndex].videos;
+  const [deletingAngle, setDeletingAngle] = useState(false);
+  // Deletes one angle (whoever recorded it, or an admin), after asking; the
+  // rest of the recording stays.
+  const removeAngle = async (video) => {
+    const take = takeName(recordings[recordingIndex], recordingIndex);
+    const whose = video.userId === userId ? "your angle" : `${video.name}'s angle`;
+    if (!window.confirm(`Delete ${whose} of ${take}? The other angles and the comments stay. This can't be undone.`)) return;
+    setDeletingAngle(true);
+    try {
+      await deleteAngle(sessionId, recordings[recordingIndex].startedAt, video.userId);
+      onUploaded((await getSessionVideos(sessionId)).recordings);
+    } catch (err) {
+      window.alert(err.message);
+    } finally {
+      setDeletingAngle(false);
+    }
+  };
   // Each angle skips ahead so all of them show the same moment; times shown
   // and saved (seek bar, comments) are on that shared timeline.
   const trims = angleTrims(videos);
@@ -466,6 +484,7 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
   };
 
   const removeComment = async (noteId) => {
+    if (!window.confirm("Delete this comment?")) return;
     setNotesError("");
     try {
       await deleteSessionNote(sessionId, noteId);
@@ -907,6 +926,17 @@ function SessionPlayer({ recordings, sessionId, userId, onUploaded, videoTime, s
             return (
             <figure key={pageIndex * perPage + index} style={tileStyle(panelIndex)}
               className={focused ? "playback-focused" : undefined}>
+              {video?.canDelete && (
+                <button type="button" className="playback-panel-delete" disabled={deletingAngle}
+                  aria-label={`Delete ${video.name}'s angle`}
+                  title={video.userId === userId ? "Delete your angle" : `Delete ${video.name}'s angle`}
+                  onClick={() => removeAngle(video)}>
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+                    stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+                  </svg>
+                </button>
+              )}
               {video?.url && (
                 <button type="button" className="playback-panel-change" disabled={uploading}
                   aria-label={`Change video for panel ${panelIndex + 1}`}
@@ -1394,14 +1424,18 @@ const css = `
   .playback-grid { position: relative; height: 70vh; min-height: 320px; overscroll-behavior-x: contain; touch-action: pan-y; }
   .playback-grid figure { position: absolute; margin: 0; display: flex; flex-direction: column; background: #000; border-radius: 6px; overflow: hidden; transition: left 0.2s, top 0.2s, width 0.2s, height 0.2s; }
   .playback-box .playback-panel-change { position: absolute; top: 6px; right: 6px; z-index: 3; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; }
+  .playback-box .playback-panel-delete { position: absolute; top: 6px; right: 40px; z-index: 3; display: flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border-radius: 50%; color: #ff8a8d; }
   /* A tile's buttons show while the mouse is over it (or a key reaches
      them), so they don't sit on top of the video the rest of the time. */
   @media (hover: hover) {
     .playback-grid figure .playback-panel-change,
+    .playback-grid figure .playback-panel-delete,
     .playback-grid figure .playback-audio { opacity: 0; transition: opacity 0.15s; }
     .playback-grid figure:hover .playback-panel-change,
+    .playback-grid figure:hover .playback-panel-delete,
     .playback-grid figure:hover .playback-audio,
     .playback-grid figure:focus-within .playback-panel-change,
+    .playback-grid figure:focus-within .playback-panel-delete,
     .playback-grid figure:focus-within .playback-audio { opacity: 1; }
   }
   /* Hidden, not unmounted: the other angles keep playing in sync offscreen. */
