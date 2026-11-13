@@ -12,6 +12,7 @@ vi.mock("../src/db/pool.js", () => ({ pool: { query: vi.fn() } }));
 
 const {
   MAX_PER_GRID, exportKey, gridArgs, gridGroups, gridLayout, openExport, pickSound,
+  deviceFromTags,
   purgeExportsUsing, sweepExports, syncWindow,
 } = await import("../src/recordings/syncedExports.js");
 
@@ -131,7 +132,10 @@ describe("gridArgs", () => {
 });
 
 describe("pickSound", () => {
-  const angle = (loudness, { run = 60, hasAudio = true } = {}) => ({ hasAudio, run, loudness });
+  const angle = (loudness, { run = 60, hasAudio = true, device = null } = {}) =>
+    ({ hasAudio, run, loudness, device });
+  const phone = (loudness, options = {}) => angle(loudness, { ...options, device: "phone" });
+  const web = (loudness, options = {}) => angle(loudness, { ...options, device: "web" });
 
   it("skips a phone whose sound is maxed out, or next to silent", () => {
     // A real take: a laptop at +0.9 LUFS (distorted), two phones near -16,
@@ -144,22 +148,40 @@ describe("pickSound", () => {
     expect(pickSound([angle(-16, { run: 20 }), angle(0.5, { run: 60 })])).toBe(0);
   });
 
-  it("uses the host's phone, as the player does", () => {
-    expect(pickSound([angle(-22), angle(-16), angle(-30)], 2)).toBe(2);
-    // Even a loud one: the grid's sound is evened out anyway.
-    expect(pickSound([angle(0.9), angle(-16)], 0)).toBe(0);
+  it("uses any phone's sound before a web recording's", () => {
+    // "dancer practice" Recording 15: a browser at +0.9 LUFS, three phones.
+    expect(pickSound([web(0.9), phone(-15.9), phone(-16.1), phone(-47.2)])).toBe(1);
+    // Even a web recording that sounds fine.
+    expect(pickSound([web(-16), phone(-24)])).toBe(1);
+    // A phone at all beats one we can't tell, which beats the web.
+    expect(pickSound([web(-16), angle(-16), phone(-20)])).toBe(2);
+    expect(pickSound([web(-16), angle(-20)])).toBe(1);
   });
 
-  it("falls back when the host's phone has no sound, or next to none", () => {
-    expect(pickSound([angle(null, { hasAudio: false }), angle(-16)], 0)).toBe(1);
-    expect(pickSound([angle(-47), angle(-16)], 0)).toBe(1);
-    expect(pickSound([angle(-20), angle(-16)], null)).toBe(1);
+  it("goes to the web when no phone has real sound", () => {
+    expect(pickSound([phone(-47), web(-18)])).toBe(1);
+    expect(pickSound([phone(null, { hasAudio: false }), web(-18)])).toBe(1);
   });
 
   it("uses any sound there is, and none when there's none", () => {
     expect(pickSound([angle(null, { hasAudio: false }), angle(null)])).toBe(1);
     expect(pickSound([angle(null, { hasAudio: false })])).toBeNull();
     expect(pickSound([angle(-3)])).toBe(0);
+  });
+});
+
+describe("deviceFromTags", () => {
+  it("tells phones from browsers by what their recorder wrote", () => {
+    // Tags seen on prod files, after the server's remux.
+    expect(deviceFromTags([{ handler_name: "Core Media Audio" }, { handler_name: "Core Media Video" }]))
+      .toBe("phone");
+    expect(deviceFromTags([{ handler_name: "VideoHandle" }, { handler_name: "SoundHandle" }]))
+      .toBe("phone");
+    expect(deviceFromTags([{ handler_name: "SoundHandler" },
+      { handler_name: "VideoHandler", encoder: "AVC1 Coding" }])).toBe("web");
+    expect(deviceFromTags([{ handler_name: "VideoHandler", encoder: "VPC Coding" }])).toBe("web");
+    expect(deviceFromTags([{ handler_name: "VideoHandler", encoder: "Lavc62.11.100 libx264" }]))
+      .toBeNull();
   });
 });
 

@@ -32,6 +32,7 @@ import { spawn } from "node:child_process";
 import { pipeline } from "node:stream/promises";
 import { pool } from "../db/pool.js";
 import { UPLOAD_DIR, storage } from "../storage/index.js";
+import { cdnEnabled, fileUrl } from "../storage/cdn.js";
 
 export const EXPORT_DIR = process.env.EXPORT_DIR
   ? path.resolve(process.env.EXPORT_DIR)
@@ -158,30 +159,47 @@ const TARGET_LUFS = -16;
 const CLIPPED_LUFS = -8;
 const QUIET_LUFS = -40;
 
-/// Whose sound a grid video uses: the host's phone (`host`, an index or
-/// null), as in the player, unless it has none or next to none. Otherwise,
-/// of `angles` ({ hasAudio, run: seconds it runs from the shared start,
-/// loudness: LUFS or null }), the one that sounds best, nearest a normal level and neither distorted nor next to
-/// silent, among those running (nearly) to the end; the first of equals.
-/// Index, or null when none has sound.
-export function pickSound(angles, host = null) {
-  const hosts = host == null ? null : angles[host];
-  if (hosts?.hasAudio && !(hosts.loudness != null && hosts.loudness < QUIET_LUFS)) return host;
-  const longest = Math.max(0, ...angles.map((a) => (a.hasAudio ? a.run : 0)));
-  const usable = angles
-    .map((angle, index) => ({ ...angle, index }))
-    .filter((a) => a.hasAudio);
-  if (usable.length === 0) return null;
-  const toEnd = usable.filter((a) => a.run >= longest * 0.9);
+/// Whose sound a grid video uses: of `angles` ({ hasAudio, run: seconds
+/// it runs from the shared start, loudness: LUFS or null, device: "phone",
+/// "web" or null when unknown; see recordedOn}), a phone's if any phone has
+/// real sound, else a web recording's (a laptop's mic is often far off or
+/// distorted). Among those, whichever sounds best: nearest a normal level,
+/// neither distorted nor next to silent, running (nearly) to the end; the
+/// first of equals. Index, or null when none has sound.
+export function pickSound(angles) {
   const badness = (a) => {
     if (a.loudness == null || !Number.isFinite(a.loudness)) return 50;
     const off = Math.abs(a.loudness - TARGET_LUFS);
     return a.loudness > CLIPPED_LUFS || a.loudness < QUIET_LUFS ? 100 + off : off;
   };
+  const withSound = angles
+    .map((angle, index) => ({ ...angle, index }))
+    .filter((a) => a.hasAudio);
+  if (withSound.length === 0) return null;
+  // Phones first, then unknown, then the web; within the first of those
+  // that has real (not silent) sound.
+  const rank = (a) => (a.device === "phone" ? 0 : a.device === "web" ? 2 : 1);
+  const heard = withSound.filter((a) => !(a.loudness != null && a.loudness < QUIET_LUFS));
+  const candidates = heard.length > 0 ? heard : withSound;
+  const firstRank = Math.min(...candidates.map(rank));
+  const usable = candidates.filter((a) => rank(a) === firstRank);
+  const longest = Math.max(...usable.map((a) => a.run));
   const best = (list) => list.reduce((b, a) => (badness(a) < badness(b) - 0.5 ? a : b));
   // Running to the end matters less than not being distorted.
-  const pick = best(toEnd);
+  const pick = best(usable.filter((a) => a.run >= longest * 0.9));
   return (badness(pick) >= 100 ? best(usable) : pick).index;
+}
+
+/// Whether a file was recorded on a phone or in a browser, from the stream
+/// tags its recorder wrote (they survive the server's remux): an iPhone's
+/// say "Core Media Video", an Android's "VideoHandle"; a browser's
+/// MediaRecorder writes "AVC1 Coding" or "VPC Coding" (or a WebM). Null
+/// when it can't tell.
+export function deviceFromTags(streamTags) {
+  const handlers = streamTags.map((t) => t.handler_name ?? "");
+  if (handlers.some((h) => /^Core Media |^(Video|Sound)Handle$/.test(h))) return "phone";
+  if (streamTags.some((t) => / Coding$/.test(t.encoder ?? ""))) return "web";
+  return null;
 }
 
 /// Which angles (indexes, in order) go in each grid video: as few videos as
@@ -205,7 +223,7 @@ export function exportKey(kind, take) {
     .map((a) => [a.fileId, a.startOffsetMs ?? null])
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   return crypto.createHash("sha256")
-    .update(JSON.stringify({ v: 5, kind, angles }))
+    .update(JSON.stringify({ v: 6, kind, angles }))
     .digest("hex")
     .slice(0, 32);
 }
@@ -265,6 +283,24 @@ async function measureLoudness(filePath) {
   ], { timeoutMs: 120_000 });
   const match = /I:\s+(-?[\d.]+) LUFS/.exec(result.err.slice(-1500));
   return result.ok && match ? Number(match[1]) : null;
+}
+
+// Whether the original of `fileId` came from a phone or a browser (see
+// deviceFromTags); null when it can't tell. Reads only its header.
+async function recordedOn(fileId) {
+  if (fileId.endsWith(".webm")) return "web";
+  const source = cdnEnabled() ? String(fileUrl(fileId))
+    : storage.describe().startsWith("local") ? path.join(UPLOAD_DIR, fileId) : null;
+  if (!source) return null;
+  const result = await runTool("ffprobe", [
+    "-v", "error", "-show_entries", "stream_tags=handler_name,encoder", "-of", "json", source,
+  ], { timeoutMs: 60_000 });
+  if (!result.ok) return null;
+  try {
+    return deviceFromTags((JSON.parse(result.out).streams ?? []).map((s) => s.tags ?? {}));
+  } catch {
+    return null;
+  }
 }
 
 // Length, upright size and whether there's sound.
@@ -578,10 +614,13 @@ async function makeGrid(job) {
     // each other.
     const { files, infos, window } =
       await plan(job, work, take.angles.map((a) => a.previewFileId || a.fileId));
-    // Which angle sounds best, for each grid video's sound.
+    // Which angle sounds best, and which came from a phone, for each grid
+    // video's sound.
     const loudness = [];
+    const devices = [];
     for (const [i, file] of files.entries()) {
       loudness.push(infos[i].hasAudio ? await measureLoudness(file) : null);
+      devices.push(infos[i].hasAudio ? await recordedOn(take.angles[i].fileId) : null);
     }
     const groups = gridGroups(take.angles.length);
     const videos = [];
@@ -589,12 +628,12 @@ async function makeGrid(job) {
       if (job.cancelled) return null;
       const portrait =
         group.filter((i) => infos[i].height > infos[i].width).length > group.length / 2;
-      const host = group.findIndex((i) => take.angles[i].userId === take.hostUserId);
       const audioFrom = pickSound(group.map((i) => ({
         hasAudio: infos[i].hasAudio,
         run: infos[i].duration - window.skips[i],
         loudness: loudness[i],
-      })), host === -1 ? null : host);
+        device: devices[i],
+      })));
       const file = `grid-${g + 1}.mp4`;
       const { args } = gridArgs(group.map((i) => files[i]), path.join(work, file), {
         // One that stopped before the shared start shows its last frame,
