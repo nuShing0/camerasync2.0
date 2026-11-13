@@ -1404,7 +1404,13 @@ class _DetailsPageState extends State<_DetailsPage> {
                   counterText: '',
                   filled: true,
                   fillColor: kSurface,
-                  border: _fieldBorder,
+                  // A filled border, so the label sits inside the box (an
+                  // outline puts it on the box's invisible edge).
+                  border: UnderlineInputBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(14)),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: EdgeInsets.fromLTRB(12, 10, 12, 10),
                 ),
               ),
               const SizedBox(height: 12),
