@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import '../api/recordings_api.dart';
 import '../keep_awake.dart';
+import '../recording/camera_problem.dart';
 import '../recording/first_frame.dart';
 import '../outbox/upload_queue.dart';
 import '../outbox/upload_status.dart';
@@ -93,6 +94,10 @@ class _CameraScreenState extends State<CameraScreen> {
   bool _recording = false;
   bool _permissionDenied = false;
 
+  /// Why the camera isn't on, when it couldn't start or stopped working
+  /// (another app has it, say). Shown with a way to try again.
+  String? _cameraError;
+
   /// Server-clock start of the recording in progress. Every device in the
   /// session shares this value, and the server groups uploads by it.
   int? _plannedStartAtEpochMs;
@@ -142,11 +147,15 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   Future<void> _initializeCamera() async {
+    if (mounted && _cameraError != null) setState(() => _cameraError = null);
     try {
       final cameras = await availableCameras();
 
       if (cameras.isEmpty) {
         debugPrint('No cameras available.');
+        if (mounted) {
+          setState(() => _cameraError = 'No camera was found on this phone.');
+        }
         return;
       }
 
@@ -169,12 +178,57 @@ class _CameraScreenState extends State<CameraScreen> {
 
       if (!mounted) return;
 
+      _cameraController!.addListener(_watchCamera);
       setState(() {
         _cameraReady = true;
       });
     } catch (e) {
       debugPrint('Error initializing camera: $e');
+      // Let go of the half-opened camera, so trying again (or coming back
+      // to the app) opens it fresh.
+      final controller = _cameraController;
+      _cameraController = null;
+      unawaited(controller?.dispose().catchError((_) {}));
+      if (mounted) {
+        setState(() {
+          _cameraReady = false;
+          _cameraError = cameraProblemMessage(e);
+        });
+      }
     }
+  }
+
+  /// The camera reporting an error after it opened, as when another app
+  /// takes it: say so, instead of a frozen picture.
+  void _watchCamera() {
+    final controller = _cameraController;
+    if (controller == null || !mounted) return;
+    final value = controller.value;
+    if (!value.hasError || _cameraError != null) return;
+    debugPrint('Camera error: ${value.errorDescription}');
+    setState(() {
+      _cameraError = cameraProblemMessage(value.errorDescription);
+    });
+  }
+
+  /// Opens the camera again, after an error.
+  Future<void> _retryCamera() async {
+    final controller = _cameraController;
+    _cameraController = null;
+    controller?.removeListener(_watchCamera);
+    setState(() {
+      _cameraReady = false;
+      _cameraError = null;
+      _recording = false;
+    });
+    await _unlockOrientation();
+    if (controller != null) {
+      if (controller.value.isRecordingVideo) {
+        await controller.stopVideoRecording().catchError((_) => XFile(''));
+      }
+      await controller.dispose().catchError((_) {});
+    }
+    await _initializeCamera();
   }
 
   /// A take keeps one orientation: the way the phone is held as it begins.
@@ -477,6 +531,53 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  /// The camera couldn't start or stopped: why, and what to do about it.
+  Widget _cameraErrorView(String message) {
+    final controlOnly = widget.onControlOnly;
+    return ColoredBox(
+      color: Colors.black,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.videocam_off_outlined,
+                  size: 44, color: Colors.white70),
+              const SizedBox(height: 14),
+              const Text(
+                'Camera unavailable',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white70, height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              FilledButton(
+                onPressed: _retryCamera,
+                child: const Text('Try again'),
+              ),
+              if (controlOnly != null) ...[
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: controlOnly,
+                  child: const Text('Control only (no camera)'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _body() {
     if (_permissionDenied) {
       return const Center(
@@ -489,6 +590,11 @@ class _CameraScreenState extends State<CameraScreen> {
           ),
         ),
       );
+    }
+
+    final cameraError = _cameraError;
+    if (cameraError != null) {
+      return _cameraErrorView(cameraError);
     }
 
     if (!_cameraReady || _cameraController == null) {

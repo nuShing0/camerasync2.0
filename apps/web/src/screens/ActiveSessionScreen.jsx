@@ -808,6 +808,7 @@ export function ActiveSessionScreen() {
                 disabled={busy}
                 onReady={handleMediaReady}
                 onDecline={declineMedia}
+                onControlOnly={mayControl && !busy ? () => setControllerOnly(true) : undefined}
               >
                 {ready && stageControls}
               </LocalMediaPreview>
