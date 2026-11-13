@@ -144,10 +144,10 @@ async function signUp(label, name) {
 }
 
 // Asks for an export until it's made (or fails).
-async function waitForExport() {
+async function waitForExport(query = "") {
   for (let i = 0; i < 300; i += 1) {
     const res = await request(app)
-      .post(`/api/recordings/sessions/${sessionId}/exports`)
+      .post(`/api/recordings/sessions/${sessionId}/exports${query}`)
       .set("Cookie", members[0].cookie);
     expect(res.status).toBe(200);
     if (res.body.state === "ready" || res.body.state === "failed") return res.body;
@@ -221,6 +221,14 @@ describe("the synced session download", () => {
       .set("Cookie", members[0].cookie)).status).toBe(400);
   });
 
+  it("can't find a recording that isn't there", async () => {
+    const path = `/api/recordings/sessions/${sessionId}`;
+    expect((await request(app).post(`${path}/exports?startedAt=123`)
+      .set("Cookie", members[0].cookie)).status).toBe(404);
+    expect((await request(app).get(`${path}/download?kind=synced&startedAt=123`)
+      .set("Cookie", members[0].cookie)).status).toBe(404);
+  });
+
   it("is only for members of the session's group", async () => {
     expect((await request(app).post(`/api/recordings/sessions/${sessionId}/exports`)
       .set("Cookie", stranger.cookie)).status).toBe(404);
@@ -273,5 +281,29 @@ describe("the synced session download", () => {
     expect(Math.abs(frameBrightness(grid, cells[0], at) - brightness(now))).toBeLessThan(2);
     expect(Math.abs(frameBrightness(grid, cells[1], at) - brightness(now))).toBeLessThan(2);
     expect(Math.abs(frameBrightness(grid, cells[2], at) - brightness(CY_LAST_FRAME))).toBeLessThan(2);
+  }, 60_000);
+
+  it.skipIf(!HAS_FFMPEG || !LOCAL)("gives just one recording's video, not a zip", async () => {
+    const path = `/api/recordings/sessions/${sessionId}`;
+    const status = await request(app).post(`${path}/exports?startedAt=${STARTED_AT}`)
+      .set("Cookie", members[0].cookie);
+    expect(status.body).toMatchObject({ state: "ready", progress: 1 });
+    expect(status.body.skipped).toBeUndefined();
+
+    const res = await request(app)
+      .get(`${path}/download?kind=synced&startedAt=${STARTED_AT}`)
+      .set("Cookie", members[0].cookie)
+      .buffer(true)
+      .parse(binary);
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toBe("video/mp4");
+    expect(res.headers["content-disposition"])
+      .toMatch(/filename="Pyramid \d{4}-\d{2}-\d{2} Recording 001\.mp4"/);
+    const video = `${work}/one.mp4`;
+    fs.writeFileSync(video, res.body);
+    expect(probe(video)).toMatchObject({ width: 1280, height: 720, hasAudio: true });
+
+    // The broken one, asked for on its own: says it couldn't be made.
+    expect((await waitForExport(`?startedAt=${STARTED_AT + 60_000}`)).state).toBe("failed");
   }, 60_000);
 });

@@ -438,17 +438,21 @@ class RecordingsApi {
   }
 
   /// Asks the server to make the session's download (every angle side by
-  /// side, lined up), and says how far along it is. Safe to
-  /// repeat: ask every couple of seconds until it's ready, then fetch
-  /// [downloadPath].
-  Future<ExportStatus> requestSyncedDownload(String id) async {
-    final data = await _api.post('/api/recordings/sessions/$id/exports');
+  /// side, lined up), or with [startedAtMs] just that recording's, and says
+  /// how far along it is. Safe to repeat: ask every couple of seconds until
+  /// it's ready, then fetch [downloadPath].
+  Future<ExportStatus> requestSyncedDownload(String id,
+      {int? startedAtMs}) async {
+    final one = startedAtMs == null ? '' : '?startedAt=$startedAtMs';
+    final data = await _api.post('/api/recordings/sessions/$id/exports$one');
     return ExportStatus.fromJson(Map<String, dynamic>.from(data as Map));
   }
 
-  /// Where the session's lined-up zip is, server-relative.
-  static String downloadPath(String id) =>
-      '/api/recordings/sessions/$id/download?kind=synced';
+  /// Where the session's lined-up zip is, server-relative; with
+  /// [startedAtMs], that recording's video (an MP4, no zip).
+  static String downloadPath(String id, {int? startedAtMs}) =>
+      '/api/recordings/sessions/$id/download?kind=synced'
+      '${startedAtMs == null ? '' : '&startedAt=$startedAtMs'}';
 
   Future<void> deleteSessionNote(String id, int noteId) async {
     await _api.delete('/api/recordings/sessions/$id/notes/$noteId');

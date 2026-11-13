@@ -5,12 +5,13 @@ import { downloadStatusText } from "../recording/downloadStatus.js";
 
 const POLL_MS = 2000;
 
-// The download button in a session's title row. One click gets the whole
-// session as a zip: one video per recording with every angle side by side,
-// lined up like the player. The server makes it first, which takes a minute
-// or more the first time; meanwhile this asks every couple of
+// The download button in a session's title row. On the session's list of
+// recordings, one click gets the whole session as a zip: one video per
+// recording with every angle side by side, lined up like the player. On a
+// recording (`startedAt`), just that recording's video. The server makes it
+// first, which takes a minute or more the first time; meanwhile this asks every couple of
 // seconds, shows how far along it is, and downloads it once it's ready.
-export function DownloadButton({ sessionId }) {
+export function DownloadButton({ sessionId, startedAt = null }) {
   // While a download is being made: the server's latest status (null
   // before the first answer) and which click it's for.
   const [making, setMaking] = useState(null);
@@ -23,14 +24,14 @@ export function DownloadButton({ sessionId }) {
     const ask = async () => {
       let status;
       try {
-        status = await requestSyncedDownload(sessionId);
+        status = await requestSyncedDownload(sessionId, startedAt);
       } catch (err) {
         status = { state: "failed", error: err.message };
       }
       if (stopped) return;
       setMaking({ attempt, status });
       if (status.state === "ready") {
-        save(sessionDownloadUrl(sessionId));
+        save(sessionDownloadUrl(sessionId, startedAt));
         timer.current = setTimeout(() => { if (!stopped) setMaking(null); }, 4000);
       } else if (status.state === "failed") {
         timer.current = setTimeout(() => { if (!stopped) setMaking(null); }, 8000);
@@ -43,15 +44,16 @@ export function DownloadButton({ sessionId }) {
       stopped = true;
       clearTimeout(timer.current);
     };
-  }, [sessionId, attempt]);
+  }, [sessionId, startedAt, attempt]);
 
-  // Another session: start over.
-  useEffect(() => setMaking(null), [sessionId]);
+  // Another session or recording: start over.
+  useEffect(() => setMaking(null), [sessionId, startedAt]);
 
   const state = making?.status?.state;
   const busy = Boolean(making) && state !== "ready" && state !== "failed";
   const percent = Math.floor((making?.status?.progress ?? 0) * 100);
-  const label = making ? downloadStatusText(making.status) : "Download all videos, side by side";
+  const label = making ? downloadStatusText(making.status)
+    : startedAt ? "Download this recording, side by side" : "Download every recording, side by side";
 
   return (
     <div className="download-button">

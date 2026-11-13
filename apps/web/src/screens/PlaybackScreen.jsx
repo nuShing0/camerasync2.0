@@ -152,7 +152,8 @@ export function PlaybackScreen({ live = null } = {}) {
               </button>
             )}
             {recordings.some((recording) => recording.videos.some((video) => video.url)) && (
-              <DownloadButton sessionId={sessionId} />
+              // On a recording, just its video; on the list, the whole session.
+              <DownloadButton sessionId={sessionId} startedAt={recording?.startedAt ?? null} />
             )}
           </>
         )}
