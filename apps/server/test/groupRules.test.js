@@ -17,10 +17,7 @@ vi.mock("../src/email/mailer.js", () => ({
 vi.mock("../src/sockets/websocket.js", () => ({
   closeSessionSocket: vi.fn(async () => {}),
   removeMemberFromGroupSessions: vi.fn(async () => {}),
-  createRecordingSession: vi.fn(),
   getRecordingSession: vi.fn(),
-  startSessionRecording: vi.fn(),
-  stopSessionRecording: vi.fn(),
 }));
 
 const { authRouter } = await import("../src/routes/auth.js");

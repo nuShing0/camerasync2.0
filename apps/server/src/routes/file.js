@@ -17,13 +17,13 @@ import { atLeast, getSessionRole, sessionVisibleSql } from "../middleware/groupR
 import { storage } from "../storage/index.js";
 import { ensureRecordingNumber, isRecordingDeleted } from "../recordings/numbering.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
-import { findEndBeep, findSyncBeep } from "../recordings/syncBeep.js";
 import { remuxForStreaming } from "../recordings/remux.js";
 import { queuePreview } from "../recordings/previews.js";
 import { retireFile } from "../recordings/retiredFiles.js";
 import { queueThumbnail } from "../recordings/thumbnails.js";
 import { queueScrubFrames } from "../recordings/scrubFrames.js";
 import { clearProgress } from "../recordings/uploadProgress.js";
+import { purgeExportsUsing } from "../recordings/syncedExports.js";
 
 export const fileRouter = Router();
 
@@ -305,16 +305,6 @@ async function finishUpload(req, res, next) {
       return savePreview(req, res, { fileId, tempPath, mediaType });
     }
 
-    // Listen for the sync beep while the file is still on local disk, in
-    // the file as stored: playback lines angles up in that file, and an
-    // iPhone's sound can sit ~50 ms differently in the original.
-    // findSyncBeep never throws; null just means playback falls back to
-    // the start time the device reported.
-    const beepAtMs = await findSyncBeep(tempPath);
-    // And for the end beep, which lines up an angle that started too late
-    // to hear the first.
-    const endBeepAtMs = await findEndBeep(tempPath);
-
     // Store first, then record the row. The other way round, a failed
     // store would leave a row pointing at nothing, and the client's retry
     // would be refused because the row already has a file_id.
@@ -337,21 +327,18 @@ async function finishUpload(req, res, next) {
               AND file_id IS NULL
          )
          INSERT INTO recording_session_videos
-           (session_id, user_id, started_at_ms, file_id, start_offset_ms, beep_at_ms,
-            end_beep_at_ms, start_offset_source)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           (session_id, user_id, started_at_ms, file_id, start_offset_ms, start_offset_source)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (session_id, user_id, started_at_ms)
          DO UPDATE SET file_id = EXCLUDED.file_id,
            ${START_OFFSET_UPSERT_SQL},
-           beep_at_ms = EXCLUDED.beep_at_ms,
-           end_beep_at_ms = EXCLUDED.end_beep_at_ms,
            preview_file_id = NULL,
            preview_failed = FALSE
          WHERE recording_session_videos.file_id IS NULL
          RETURNING file_id, (SELECT preview_file_id FROM old) AS old_preview`,
         [req.query.sessionId, req.user.id, Number(req.query.startedAt), fileId,
           startOffsetMs(req.query.actualStartedAt, Number(req.query.startedAt)),
-          beepAtMs, endBeepAtMs, startClock(req.query.startClock)]
+          startClock(req.query.startClock)]
       ));
     } catch (err) {
       await storage.remove([fileId]).catch(() => {});
@@ -653,4 +640,6 @@ export async function deleteRecordingFiles(fileIds) {
     if (!FILE_ID_PATTERN.test(fileId)) throw new Error("Invalid recording file ID.");
   }
   await storage.remove(fileIds);
+  // And the synced and grid downloads made from them.
+  await purgeExportsUsing(fileIds);
 }

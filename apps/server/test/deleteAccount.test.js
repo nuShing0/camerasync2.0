@@ -48,11 +48,15 @@ beforeAll(async () => {
   memberCookie = await signUp(MEMBER);
   expect((await request(app).post("/api/groups").set("Cookie", ownerCookie)
     .send({ id: GROUP_ID, name: "Delete Test Team", isPublic: true })).status).toBe(201);
-  // A session the member starts (without a group), to outlive them.
-  const live = await request(app).post("/api/recordings/sessions/live")
-    .set("Cookie", memberCookie).send({ name: "Left behind" });
-  expect(live.status).toBe(201);
-  sessionId = live.body.session.id;
+  // A session the member started (an old one without a group), to outlive
+  // them.
+  const member = await pool.query("SELECT user_id FROM users WHERE email = $1", [MEMBER]);
+  sessionId = `d${RUN}`.slice(-6).replace(/^\d/, "d");
+  await pool.query(
+    `INSERT INTO recording_sessions (id, group_id, name, scheduled_at, created_by, status)
+     VALUES ($1, NULL, 'Left behind', NOW(), $2, 'active')`,
+    [sessionId, member.rows[0].user_id]
+  );
 });
 
 afterAll(async () => {

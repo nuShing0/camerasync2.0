@@ -10,9 +10,9 @@ import {
   deleteRecording,
   getSessionVideos,
   mediaCors,
-  sessionDownloadUrl,
   uploadSessionVideo,
 } from "../api/recordings.js";
+import { DownloadButton } from "../components/DownloadButton.jsx";
 import { anglesPerPage, commonAspect, layoutAngles } from "../recording/angleLayout.js";
 import { JUMP_BEYOND_MS, speedFor } from "../recording/angleSync.js";
 import { angleTrims } from "../recording/angleTrims.js";
@@ -152,13 +152,8 @@ export function PlaybackScreen({ live = null } = {}) {
               </button>
             )}
             {recordings.some((recording) => recording.videos.some((video) => video.url)) && (
-              <a className="playback-download" href={sessionDownloadUrl(sessionId)} download
-                aria-label="Download all videos" title="Download all videos">
-                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                  <path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14" fill="none" stroke="currentColor"
-                    strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-              </a>
+              // On a recording, just its video; on the list, the whole session.
+              <DownloadButton sessionId={sessionId} startedAt={recording?.startedAt ?? null} />
             )}
           </>
         )}
@@ -1350,11 +1345,6 @@ const css = `
   .playback-page button.playback-back { background: none; border: 0; padding: 0; cursor: pointer; font-family: inherit; }
   .playback-page h1 { flex: 1; min-width: 0; font-size: 1.4rem; margin: 0; overflow-wrap: anywhere; }
   .playback-title { display: flex; align-items: center; gap: 12px; margin-bottom: 0.75rem; }
-  .playback-page .playback-download {
-    flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
-    width: 38px; height: 38px; border-radius: 8px; color: var(--accent);
-  }
-  .playback-page .playback-download:hover { background: rgba(255,255,255,0.08); }
   .playback-page .playback-delete {
     flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
     width: 38px; height: 38px; border-radius: 8px; border: none; background: none;

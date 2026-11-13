@@ -1,11 +1,13 @@
 // Recording session REST routes.
 //
 // Creates and manages recording sessions, delegating the live websocket
-// channel work to ../middleware/websocket.js. Mounted at /api/recordings
+// channel work to ../sockets/websocket.js. Mounted at /api/recordings
 // (see ../index.js).
 
 import crypto from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import archiver from "archiver";
 import { Router } from "express";
 import { pool } from "../db/pool.js";
@@ -19,38 +21,21 @@ import {
   sessionVisibleSql,
 } from "../middleware/groupRole.js";
 import {
-  createRecordingSession,
   getRecordingSession,
-  startSessionRecording,
-  stopSessionRecording,
   closeSessionSocket,
   leaveSessionRoom,
 } from "../sockets/websocket.js";
 import { deleteRecordingFiles, storedFileIds } from "./file.js";
-import { EVENTS } from "../sockets/events.js";
 import { ensureRecordingNumber, isRecordingDeleted } from "../recordings/numbering.js";
 import { START_OFFSET_UPSERT_SQL, startClock, startOffsetMs } from "../recordings/startOffset.js";
 import { STAGES, progressFor, reportProgress } from "../recordings/uploadProgress.js";
-import { startOffsetFromBeep, startOffsetFromEndBeep } from "../recordings/syncBeep.js";
+import {
+  MAX_PER_GRID, ensureExports, exportFailure, openExport,
+} from "../recordings/syncedExports.js";
 
 export const recordingsRouter = Router();
-const SOCKET_STATUSES = new Set(['recording', 'stopped']);
 const SESSION_ID_CHARACTERS = "abcdefghijklmnopqrstuvwxyz0123456789";
 const SESSION_ID_PATTERN = /^[a-z0-9]{6}$/;
-
-// Count this account's uploaded videos across all groups.
-recordingsRouter.get("/my-video-count", requireAuth, async (req, res, next) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT COUNT(*) AS count FROM recording_session_videos
-       WHERE user_id = $1 AND file_id IS NOT NULL`,
-      [req.user.id]
-    );
-    res.json({ count: Number(rows[0].count) });
-  } catch (err) {
-    next(err);
-  }
-});
 
 // makes a random six character session id
 function createSessionId() {
@@ -71,8 +56,7 @@ function publicSession(row) {
     createdBy: Number(row.created_by),
     status: row.status,
     memberCount: row.member_count == null ? null : Number(row.member_count),
-    // Angles (one per phone per take) across the session, and the takes.
-    totalRecordings: row.total_recordings == null ? null : Number(row.total_recordings),
+    // How many takes the session has.
     recordingCount: row.recording_count == null ? null : Number(row.recording_count),
     activeMemberCount: Number(row.active_member_count ?? 0),
     // Who's in the session now, earliest first, for Home's live card.
@@ -115,9 +99,6 @@ recordingsRouter.get("/sessions", requireAuth, async (req, res, next) => {
               CASE WHEN rs.counts_tracked THEN
                 (SELECT COUNT(*) FROM recording_session_participants p
                   WHERE p.session_id = rs.id) END AS member_count,
-              CASE WHEN rs.counts_tracked THEN
-                (SELECT COUNT(*) FROM recording_session_videos v
-                  WHERE v.session_id = rs.id) END AS total_recordings,
               CASE WHEN rs.counts_tracked THEN
                 (SELECT COUNT(DISTINCT v.started_at_ms) FROM recording_session_videos v
                   WHERE v.session_id = rs.id) END AS recording_count,
@@ -259,56 +240,6 @@ recordingsRouter.delete("/sessions/:id/recordings/:startedAt", requireAuth, asyn
   }
 });
 
-// How much later a camera really started than its take's startedAt, which
-// players shift the angle by, and what that comes from.
-//
-// First choice is the moment the device's camera captured its first frame
-// ('clock'): it lines up the pictures, which is what a coach compares. The
-// beeps line up each device's sound, and every device keeps its picture a
-// different distance from its sound: on 2026-10-22's light-switch test the
-// beep left a Galaxy, an iPhone and Chrome 3-6 frames apart, the first-frame
-// time 1-1.5 frames. The beep (start, else end) is the fallback for devices
-// that don't report a first frame (Firefox, Safari, older app versions) and
-// the check on those that do; then the time the device reported, else
-// nothing. Both are returned on their own too, to compare.
-function videoStartOffset(row, startedAt) {
-  const clock = row.start_offset_source === "frame" && row.start_offset_ms != null
-    ? Number(row.start_offset_ms)
-    : null;
-  const beep = beepOffset(row, startedAt);
-  return {
-    ...syncOffset(row, clock, beep),
-    ...(clock != null ? { clockStartOffsetMs: clock } : {}),
-    ...(beep != null ? { beepStartOffsetMs: beep } : {}),
-  };
-}
-
-// Further apart than this, a first-frame time and the beep can't both be
-// right (the phone's clock jumped, or synced badly on a poor connection), and
-// the beep, which is measured in the video itself, is trusted.
-export const CLOCK_BEEP_MAX_DISAGREEMENT_MS = 500;
-
-function beepOffset(row, startedAt) {
-  if (row.beep_at_ms != null) return startOffsetFromBeep(Number(row.beep_at_ms));
-  if (row.end_beep_at_ms != null && row.end_beep_epoch_ms != null) {
-    return startOffsetFromEndBeep(
-      Number(row.end_beep_at_ms), Number(row.end_beep_epoch_ms), startedAt);
-  }
-  return null;
-}
-
-function syncOffset(row, clock, beep) {
-  if (clock != null &&
-      (beep == null || Math.abs(clock - beep) <= CLOCK_BEEP_MAX_DISAGREEMENT_MS)) {
-    return { startOffsetMs: clock, syncedBy: "clock" };
-  }
-  if (beep != null) return { startOffsetMs: beep, syncedBy: "beep" };
-  if (row.start_offset_ms != null) {
-    return { startOffsetMs: Number(row.start_offset_ms), syncedBy: "device" };
-  }
-  return { startOffsetMs: null, syncedBy: null };
-}
-
 // Load the session's recordings for members of its group.
 recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next) => {
   try {
@@ -322,8 +253,6 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
     }
     const { rows } = await pool.query(
       `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id, v.scrub, v.start_offset_ms,
-              v.start_offset_source,
-              v.beep_at_ms, v.end_beep_at_ms, sr.end_beep_epoch_ms,
               u.display_name, sr.recording_number
        FROM recording_session_videos v JOIN users u ON u.user_id = v.user_id
        LEFT JOIN session_recordings sr
@@ -365,7 +294,11 @@ recordingsRouter.get("/sessions/:id/videos", requireAuth, async (req, res, next)
         scrub: row.file_id && row.scrub
           ? { ...row.scrub, sheets: row.scrub.sheets.map((id) => fileUrl(id)) }
           : null,
-        ...videoStartOffset(row, startedAt),
+        // How much later this camera really started than the take's
+        // startedAt, which players shift the angle by: from the device's
+        // first frame where it can say, or the old sync beep for older takes.
+        // Null for uploads from before it was tracked (treated as 0).
+        startOffsetMs: row.start_offset_ms == null ? null : Number(row.start_offset_ms),
         // How far along its upload is, while the full video isn't in yet.
         upload: row.file_id ? null : progressFor(req.params.id, startedAt, Number(row.user_id)),
       });
@@ -451,34 +384,100 @@ recordingsRouter.post("/sessions/:id/videos", requireAuth, async (req, res, next
 // USB stick: a folder per recording ("Recording 001") with each member's
 // angle named after them. Stored, not compressed: video is already
 // compressed, so the zip starts streaming at once and costs no CPU.
+//
+// With ?kind=synced (what the apps' download button asks for) it's instead
+// one video per recording with every angle side by side, lined up like the
+// player: "Recording 001.mp4" ("Recording 001 (2 of 4).mp4" when a big
+// recording needed several). Those are made in the background first
+// (POST .../exports, see ../recordings/syncedExports.js); until they're
+// ready this answers 409.
+// Without it: each phone's original file, as recorded (not lined up).
+//
+// ?startedAt= narrows either to one recording (what the apps' download
+// button asks for: the recording being watched). Synced, that's the video
+// itself, no zip ("Pyramid 2026-11-12 Recording 015.mp4"), unless a big
+// recording needed several.
+const SYNCED_PARTS = ["grid"];
+
+// Just the recording that started at `startedAt` (?startedAt=), when one is
+// asked for; null when there's no such recording.
+function pickRecording(takes, startedAt) {
+  if (startedAt == null || startedAt === "") return takes;
+  const take = takes.find((t) => t.startedAt === Number(startedAt));
+  return take ? [take] : null;
+}
+
+// "Recording 001", or "Recording 001 (2 of 4)" when it needed several.
+function gridName(take, index, count) {
+  const name = `Recording ${String(take.number).padStart(3, "0")}`;
+  return count === 1 ? name : `${name} (${index + 1} of ${count})`;
+}
+
 recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, next) => {
+  const kind = req.query.kind ?? "original";
+  if (kind !== "original" && kind !== "synced") {
+    return res.status(400).json({ error: "Unknown download kind." });
+  }
+  const synced = kind === "synced";
+  // Per recording: { grid } finished exports, held until sent.
+  const opened = [];
   let archive;
   try {
-    const { rows: sessions } = await pool.query(
-      `SELECT rs.id, rs.name, rs.scheduled_at FROM recording_sessions rs
-       WHERE rs.id = $1 AND ${sessionVisibleSql("rs", "$2")}`,
-      [req.params.id, req.user.id]
-    );
-    if (sessions.length === 0) {
-      return res.status(404).json({ error: "Session not found." });
-    }
-    const { rows: videos } = await pool.query(
-      `SELECT v.file_id, v.started_at_ms, u.display_name, sr.recording_number
-         FROM recording_session_videos v
-         JOIN users u ON u.user_id = v.user_id
-         LEFT JOIN session_recordings sr
-           ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
-        WHERE v.session_id = $1 AND v.file_id IS NOT NULL
-        ORDER BY v.started_at_ms, u.display_name`,
-      [req.params.id]
-    );
-    if (videos.length === 0) {
+    const session = await visibleSession(req.params.id, req.user.id);
+    if (!session) return res.status(404).json({ error: "Session not found." });
+    const takes = pickRecording(await sessionTakes(req.params.id), req.query.startedAt);
+    if (!takes) return res.status(404).json({ error: "Recording not found." });
+    if (takes.length === 0) {
       return res.status(404).json({ error: "No videos have been uploaded for this session." });
     }
 
-    const session = sessions[0];
+    if (synced) {
+      for (const take of takes) {
+        const parts = {};
+        for (const part of SYNCED_PARTS) {
+          const ready = await openExport(part, take);
+          if (ready) parts[part] = ready;
+        }
+        opened.push(parts);
+      }
+      if (opened.some((parts) => SYNCED_PARTS.some((part) => !parts[part]))) {
+        const status = await ensureExports(SYNCED_PARTS, takes);
+        if (status.state !== "ready") {
+          return res.status(409).json({ error: "This download is still being made.", status });
+        }
+        // Everything's done, but some takes couldn't be made: send the rest
+        // (the note says which are missing). One may have finished since.
+        for (const [t, take] of takes.entries()) {
+          for (const part of SYNCED_PARTS) {
+            if (opened[t][part]) continue;
+            const ready = await openExport(part, take);
+            if (ready) opened[t][part] = ready;
+          }
+        }
+      }
+    }
+
     const day = new Date(session.scheduled_at).toISOString().slice(0, 10);
-    const zipName = `${safeName(session.name) || "Session"} ${day}.zip`;
+    const one = req.query.startedAt ? ` ${gridName(takes[0], 0, 1)}` : "";
+    const base = `${safeName(session.name) || "Session"} ${day}`;
+
+    // One recording, one grid video: the video itself.
+    const grid = synced && takes.length === 1 ? opened[0].grid : null;
+    if (one && grid?.videos.length === 1) {
+      const file = grid.path(grid.videos[0].file);
+      const videoName = `${base}${one}.mp4`;
+      res.set({
+        "Content-Type": "video/mp4",
+        "Content-Length": String((await fs.promises.stat(file)).size),
+        "Content-Disposition":
+          `attachment; filename="${videoName.replace(/"/g, "")}"; filename*=UTF-8''${encodeURIComponent(videoName)}`,
+      });
+      // A cancelled download just ends.
+      await pipeline(fs.createReadStream(file), res).catch(() => res.destroy());
+      return;
+    }
+
+    const zipName = `${base}${one || (synced ? " synced" : "")}.zip`;
     res.set({
       "Content-Type": "application/zip",
       "Content-Disposition":
@@ -498,22 +497,42 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
     archive.pipe(res);
 
     // One file at a time, so a long session doesn't open every video at once.
-    const takes = new Map();
-    const used = new Set();
-    for (const video of videos) {
-      const startedAt = Number(video.started_at_ms);
-      if (!takes.has(startedAt)) takes.set(startedAt, video.recording_number ?? takes.size + 1);
-      const folder = `Recording ${String(takes.get(startedAt)).padStart(3, "0")}`;
-      let name = `${folder}/${safeName(video.display_name) || "Member"}${path.extname(video.file_id)}`;
-      for (let n = 2; used.has(name); n += 1) {
-        name = `${folder}/${safeName(video.display_name) || "Member"} (${n})${path.extname(video.file_id)}`;
-      }
-      used.add(name);
-
-      const stream = await storage.open(video.file_id);
+    const add = async (stream, name, date) => {
       const added = new Promise((resolve) => archive.once("entry", resolve));
-      archive.append(stream, { name, date: new Date(startedAt) });
+      archive.append(stream, { name, date });
       await added;
+    };
+    if (synced) {
+      const used = new Set();
+      for (const [t, take] of takes.entries()) {
+        const { grid } = opened[t];
+        if (!grid) continue;
+        const date = new Date(take.startedAt);
+        for (const [g, video] of grid.videos.entries()) {
+          let name = `${gridName(take, g, grid.videos.length)}.mp4`;
+          for (let n = 2; used.has(name); n += 1) {
+            name = `${gridName(take, g, grid.videos.length)} (${n}).mp4`;
+          }
+          used.add(name);
+          await add(fs.createReadStream(grid.path(video.file)), name, date);
+        }
+      }
+      archive.append(syncedReadme(takes, opened), { name: "About these videos.txt" });
+    }
+    for (const take of synced ? [] : takes) {
+      const folder = `Recording ${String(take.number).padStart(3, "0")}`;
+      const date = new Date(take.startedAt);
+      const used = new Set();
+      const named = (base, ext) => {
+        let name = `${folder}/${base}${ext}`;
+        for (let n = 2; used.has(name); n += 1) name = `${folder}/${base} (${n})${ext}`;
+        used.add(name);
+        return name;
+      };
+      for (const angle of take.angles) {
+        const base = safeName(angle.name) || "Member";
+        await add(await storage.open(angle.fileId), named(base, path.extname(angle.fileId)), date);
+      }
     }
     await archive.finalize();
   } catch (err) {
@@ -522,8 +541,128 @@ recordingsRouter.get("/sessions/:id/download", requireAuth, async (req, res, nex
       if (res.headersSent) return res.destroy(err);
     }
     next(err);
+  } finally {
+    for (const parts of opened) for (const ready of Object.values(parts)) ready.release();
   }
 });
+
+// Asks for the session's synced download (or, with ?startedAt=, one
+// recording's) to be made, and says how far along it is: { state: queued|working|ready|failed, progress (0-1), waiting,
+// error }. Safe to repeat: the apps call it every couple of seconds until
+// it's "ready", then fetch .../download?kind=synced.
+recordingsRouter.post("/sessions/:id/exports", requireAuth, async (req, res, next) => {
+  try {
+    if (!(await visibleSession(req.params.id, req.user.id))) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    const takes = pickRecording(await sessionTakes(req.params.id), req.query.startedAt);
+    if (!takes) return res.status(404).json({ error: "Recording not found." });
+    if (takes.length === 0) {
+      return res.status(404).json({ error: "No videos have been uploaded for this session." });
+    }
+    res.json(await ensureExports(SYNCED_PARTS, takes));
+  } catch (err) {
+    next(err);
+  }
+});
+
+async function visibleSession(sessionId, userId) {
+  const { rows } = await pool.query(
+    `SELECT rs.id, rs.name, rs.scheduled_at FROM recording_sessions rs
+     WHERE rs.id = $1 AND ${sessionVisibleSql("rs", "$2")}`,
+    [sessionId, userId]
+  );
+  return rows[0] ?? null;
+}
+
+// The session's recordings with their uploaded angles (in name order) and
+// each angle's start offset: the stored one the player lines it up by.
+async function sessionTakes(sessionId) {
+  const { rows } = await pool.query(
+    `SELECT v.started_at_ms, v.user_id, v.file_id, v.preview_file_id,
+            v.start_offset_ms, v.start_offset_source,
+            u.display_name, sr.recording_number
+       FROM recording_session_videos v
+       JOIN users u ON u.user_id = v.user_id
+       LEFT JOIN session_recordings sr
+         ON sr.session_id = v.session_id AND sr.started_at_ms = v.started_at_ms
+      WHERE v.session_id = $1 AND v.file_id IS NOT NULL
+      ORDER BY v.started_at_ms, u.display_name, v.user_id`,
+    [sessionId]
+  );
+  const takes = [];
+  for (const row of rows) {
+    const at = Number(row.started_at_ms);
+    let take = takes[takes.length - 1];
+    if (!take || take.startedAt !== at) {
+      take = {
+        sessionId,
+        startedAt: at,
+        number: row.recording_number == null ? takes.length + 1 : Number(row.recording_number),
+        angles: [],
+      };
+      takes.push(take);
+    }
+    const startOffsetMs = row.start_offset_ms == null ? null : Number(row.start_offset_ms);
+    take.angles.push({
+      userId: Number(row.user_id),
+      name: row.display_name || "Member",
+      fileId: row.file_id,
+      // A server preview, or the phone's; both keep the original's timeline.
+      previewFileId: row.preview_file_id && row.preview_file_id !== row.file_id
+        ? row.preview_file_id : null,
+      startOffsetMs,
+      // What the offset was measured from, for the note in the zip.
+      syncedBy: startOffsetMs == null ? null : row.start_offset_source ?? "call",
+    });
+  }
+  return takes;
+}
+
+// start_offset_source: the camera's first frame, the time the phone was
+// told to start (older apps), or the sync beep (older takes).
+const SYNCED_BY = {
+  frame: "first frame",
+  call: "phone's clock",
+  beep: "sync beep",
+};
+
+// A note in the zip: how each angle was lined up.
+function syncedReadme(takes, opened) {
+  const lines = [
+    "Each video shows every angle of one recording side by side, lined up the same way as the",
+    "8Kount player: they all start at the same moment, and a phone that stopped early stays on",
+    `its last frame. A big recording is split across several videos, up to ${MAX_PER_GRID} angles each.`,
+    "",
+  ];
+  for (const [t, take] of takes.entries()) {
+    const { grid } = opened[t];
+    const recording = `Recording ${String(take.number).padStart(3, "0")}`;
+    if (!grid) {
+      const why = exportFailure("grid", take) ?? "it couldn't be made";
+      lines.push(`${recording}: not included. ${why}`);
+      continue;
+    }
+    lines.push(`${recording} (${formatSeconds(grid.length)})`);
+    for (const [a, angle] of grid.angles.entries()) {
+      const how = SYNCED_BY[angle.syncedBy] ?? "not measured, kept as recorded";
+      const end = grid.ends?.[a];
+      const stopped = end != null && end < grid.length - 1 ? `; stopped at ${formatSeconds(end)}` : "";
+      lines.push(`  ${angle.name}: ${angle.skip.toFixed(3)} s trimmed from the start (${how})${stopped}`);
+    }
+    if (grid.videos.length > 1) {
+      for (const [g, video] of grid.videos.entries()) {
+        lines.push(`  ${gridName(take, g, grid.videos.length)}: ${video.angles.join(", ")}`);
+      }
+    }
+  }
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function formatSeconds(seconds) {
+  const whole = Math.round(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
 
 // Letters, numbers, spaces and a little punctuation, for names inside a zip.
 function safeName(value) {
@@ -737,26 +876,29 @@ recordingsRouter.post("/sessions/live", requireAuth, async (req, res, next) => {
   if (!name) {
     return res.status(400).json({ error: "Session name is required." });
   }
+  // Every session belongs to a group: the group's invite is the one code
+  // people share. (Sessions without a group, joined by their own code, were
+  // dropped as confusing; old ones still work, see the join route.)
+  if (!groupId) {
+    return res.status(400).json({ error: "Choose a group for this session." });
+  }
 
   let client;
   try {
-    // With a group, only its admins and owner start sessions. Without one,
-    // anyone signed in can, and shares the code.
-    if (groupId) {
-      const membership = await pool.query(
-        `SELECT 1
-           FROM group_members
-          WHERE group_id = $1
-            AND user_id = $2
-            AND role = 'admin'`,
-        [groupId, req.user.id]
-      );
+    // Only the group's admins and owner start sessions.
+    const membership = await pool.query(
+      `SELECT 1
+         FROM group_members
+        WHERE group_id = $1
+          AND user_id = $2
+          AND role = 'admin'`,
+      [groupId, req.user.id]
+    );
 
-      if (membership.rowCount === 0) {
-        return res.status(403).json({
-          error: "Only owners and admins can create a session.",
-        });
-      }
+    if (membership.rowCount === 0) {
+      return res.status(403).json({
+        error: "Only owners and admins can create a session.",
+      });
     }
 
     client = await pool.connect();
@@ -774,7 +916,7 @@ recordingsRouter.post("/sessions/live", requireAuth, async (req, res, next) => {
          ON CONFLICT (id) DO NOTHING
          RETURNING id, group_id, name, scheduled_at,
                    created_at, created_by, status`,
-        [id, groupId || null, name, req.user.id]
+        [id, groupId, name, req.user.id]
       );
 
       if (rows.length > 0) {
@@ -854,8 +996,9 @@ recordingsRouter.post(
       const session = rows[0];
       // Joining a session makes this device one of its cameras, which is
       // exactly what a viewer must not be.
-      // Without a group, the code is the invite: anyone signed in who has
-      // it joins as a member.
+      // An old session without a group (they can't be started any more):
+      // its code is the invite, so anyone signed in who has it joins as a
+      // member.
       const joinRole = session.group_id == null
         ? "member"
         : Number(session.owner_id) === Number(req.user.id)
@@ -1114,128 +1257,3 @@ recordingsRouter.patch(
     }
   }
 );
-
-// Create a new recording session (and host its websocket channel).
-recordingsRouter.post("/create", requireAuth, async (req, res, next) => {
-  try {
-    // TODO: validate body, generate sessionId (crypto.randomUUID()),
-    // persist the session, then createSessionSocket(io, sessionId).
-    // TODO: return 201 with the new session + how phones should connect.
-    const {name} = req.body ?? {};
-    if (name !== undefined && typeof name !== "string") {
-      return res.status(400).json({error: "name must be a string"});
-    }
-
-    const sessionId = crypto.randomUUID();
-
-    const { rows } = await pool.query(`
-      INSERT INTO recordings (id, name, status)
-      VALUES ($1, $2, 'created')
-      RETURNING id, name, status, created_at
-      `,
-    [sessionId, name ?? null]);
-
-    createRecordingSession(sessionId);
-
-    res.status(200).json({
-      session: rows[0],
-      connect: {
-        sessionId,
-        event: EVENTS.JOIN_SESSION
-      }
-    })
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Fetch a session's current info / connected devices.
-recordingsRouter.get("/info", requireAuth, async (req, res, next) => {
-  try {
-    const {sessionId} = req.query;
-    if (!sessionId) {
-      return res.status(400).json({message: "sessionId is requred."});
-    }
-
-    const { rows } = await pool.query(`
-      SELECT id, name, status, created_at, started_at, stopped_at, closed_at
-      FROM recordings WHERE id = $1`,
-    [sessionId]);
-
-    if (rows.length === 0) {
-      return res.status(404).json({message: "sessionId not found."})
-    }
-
-    const currentSocket = await getRecordingSession(sessionId);
-
-    // ... is spread op to unpack data
-    res.status(200).json({ ...rows[0], ...currentSocket})
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Update session state (e.g. start/stop recording).
-recordingsRouter.patch("/update", requireAuth, async (req, res, next) => {
-  try {
-    const {sessionId, status} = req.body ?? {};
-    if (!sessionId) {
-      return res.status(400).json({message: "sessionId is requred."});
-    }
-
-    if(!SOCKET_STATUSES.has(status)) {
-      return res.status(403).json({message: "requested status is not valid"});
-    }
-
-    const timestampCol = status === "recording" ? "started_at" : "stopped_at"
-
-    const { rows } = await pool.query(
-      `UPDATE recordings
-      SET status = $1, ${timestampCol} = now()
-      WHERE id = $2 AND status != 'closed'
-      RETURNING id, name, status, started_at, stopped_at`,
-      [status, sessionId]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({message: "sessionId not found."})
-    }
-
-    if (status === "recording") {
-      startSessionRecording(sessionId);
-    } else {
-      stopSessionRecording(sessionId);
-    }
-
-    res.status(200).json(rows[0])
-  } catch (err) {
-    next(err);
-  }
-});
-
-// End a session and tear down its websocket channel.
-recordingsRouter.delete("/close", requireAuth, async (req, res, next) => {
-  try {
-    const {sessionId, status} = req.body ?? {};
-    if (!sessionId) {
-      return res.status(400).json({message: "sessionId is requred."});
-    }
-
-    const {rows} = await pool.query(
-      `UPDATE recordings
-      SET status = 'closed', closed_at = now()
-      WHERE id = $1
-      RETURNING id, status, closed_at`,
-      [sessionId]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({message: "sessionId not found."})
-    }
-
-    await closeSessionSocket(sessionId);
-
-    res.status(200).json(rows[0]);
-  } catch (err) {
-    next(err);
-  }
-});

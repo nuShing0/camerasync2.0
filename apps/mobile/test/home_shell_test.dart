@@ -52,7 +52,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Start a session now'), findsOneWidget);
     expect(find.text('Schedule a session'), findsOneWidget);
-    expect(find.text('Join with a code'), findsOneWidget);
+    // Every session is in a group: no session code to type.
+    expect(find.text('Join with a code'), findsNothing);
   });
 
   testWidgets('Settings opens from the gear on Home', (tester) async {

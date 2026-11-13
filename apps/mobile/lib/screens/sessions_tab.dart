@@ -254,8 +254,7 @@ class _SessionsTabState extends State<SessionsTab> {
               LiveCard(
                 session: s,
                 groupName: _groupOf(s)?.name ??
-                    // A session without a group shows its code, to share.
-                    (s.groupId == null ? 'Code ${s.id}' : null),
+                    (s.groupId == null ? 'No group' : null),
                 joining: _busyId == s.id,
                 onJoin: _canJoin(s) ? () => _join(s) : null,
                 // Takes already recorded can be watched while it's live.

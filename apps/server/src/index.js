@@ -13,9 +13,9 @@ import { startThumbnailBackfill } from "./recordings/thumbnails.js";
 import { startScrubBackfill } from "./recordings/scrubFrames.js";
 import { startUnfinishedUploadSweep } from "./routes/file.js";
 import { startRetiredFileSweep } from "./recordings/retiredFiles.js";
+import { startExportSweep } from "./recordings/syncedExports.js";
 import { authRouter } from "./routes/auth.js";
 import { groupRouter } from "./routes/groups.js";
-import { postRouter } from "./routes/posts.js";
 import { recordingsRouter } from './routes/recordings.js';
 import { fileRouter } from "./routes/file.js";
 import { notificationsRouter } from "./routes/notifications.js";
@@ -41,7 +41,6 @@ app.get("/", async (req, res) => {
 // REST routes go here as the API grows:
 app.use("/api/auth", authRouter);
 app.use("/api/groups", groupRouter);
-app.use("/api/posts", postRouter);
 app.use("/api/recordings", recordingsRouter);
 app.use("/api/files", fileRouter);
 app.use("/api/notifications", notificationsRouter);
@@ -54,6 +53,7 @@ startIdleSessionChecks();
 startPreviewBackfill();
 startThumbnailBackfill();
 startScrubBackfill();
+startExportSweep();
 startUnfinishedUploadSweep();
 startRetiredFileSweep();
 

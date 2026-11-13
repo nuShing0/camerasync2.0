@@ -74,9 +74,8 @@ export function SessionScheduler({
     time: "",
     groupId: "",
   });
-  // A live session can have no group ("" here): anyone joins with its code.
+  // Every session is in a group (the group's invite is the one code).
   const [liveGroupId, setLiveGroupId] = useState("");
-  const [joinCode, setJoinCode] = useState("");
 
   const adminGroups = useMemo(
     () => groups.filter((group) => group.role === "admin"),
@@ -179,28 +178,12 @@ export function SessionScheduler({
     try {
       const session = await createLiveSession({
         name: form.name,
-        ...(liveGroupId && { groupId: liveGroupId }),
+        groupId: liveGroupId,
       });
 
       setSessions((current) => [...current, session]);
       setForm((current) => ({ ...current, name: "" }));
       closePanel();
-      navigate(`/record/${session.id}`);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  // joins any live session by its 6-character code, group or not
-  const submitJoinCode = async (event) => {
-    event.preventDefault();
-    setError("");
-    setSubmitting(true);
-    try {
-      const session = await joinSession(joinCode.trim().toLowerCase());
-      setJoinCode("");
       navigate(`/record/${session.id}`);
     } catch (err) {
       setError(err.message);
@@ -312,45 +295,7 @@ export function SessionScheduler({
         >
           Schedule
         </button>
-        <button
-          className={openPanel === "code" ? "is-selected" : ""}
-          type="button"
-          onClick={() => togglePanel("code")}
-          aria-expanded={openPanel === "code"}
-        >
-          Join with a code
-        </button>
       </div>
-      )}
-
-      {showForms && openPanel === "code" && (
-        <form className="session-schedule-form session-create-form" onSubmit={submitJoinCode}>
-          <label>
-            Session code
-            <input
-              type="text"
-              value={joinCode}
-              placeholder="abc123"
-              maxLength={6}
-              autoCapitalize="none"
-              autoComplete="off"
-              onChange={(event) => setJoinCode(event.target.value)}
-              required
-            />
-          </label>
-          <div className="session-schedule-actions">
-            <button type="button" onClick={closePanel}>
-              Cancel
-            </button>
-            <button
-              className="session-submit-button"
-              type="submit"
-              disabled={submitting || joinCode.trim().length !== 6}
-            >
-              {submitting ? "Joining..." : "Join"}
-            </button>
-          </div>
-        </form>
       )}
 
       {showForms && openPanel === "schedule" && (
@@ -471,19 +416,24 @@ export function SessionScheduler({
             <select
               value={liveGroupId}
               onChange={(event) => setLiveGroupId(event.target.value)}
+              disabled={adminGroups.length === 0}
+              required
             >
-              {adminGroups.map((group) => (
-                <option value={group.id} key={group.id}>
-                  {group.name}
-                </option>
-              ))}
-              <option value="">No group (share the code)</option>
+              {adminGroups.length === 0 ? (
+                <option value="">No admin groups available</option>
+              ) : (
+                adminGroups.map((group) => (
+                  <option value={group.id} key={group.id}>
+                    {group.name}
+                  </option>
+                ))
+              )}
             </select>
           </label>
-          {!liveGroupId && (
+          {adminGroups.length === 0 && (
             <p className="session-create-hint">
-              Anyone signed in can join with the session's code. Only the people
-              who join can see its recordings.
+              Sessions are started by a group's owner or admins. Make your own
+              group, or ask your coach to start one: it shows up here to join.
             </p>
           )}
 
@@ -494,7 +444,7 @@ export function SessionScheduler({
             <button
               className="session-submit-button"
               type="submit"
-              disabled={submitting}
+              disabled={submitting || adminGroups.length === 0}
             >
               {submitting ? "Starting..." : "Start session"}
             </button>
@@ -546,7 +496,8 @@ export function SessionScheduler({
                       {session.activeMemberCount === 1 ? "member" : "members"}
                     </span>
                   )}
-                  <code>{session.id}</code>
+                  {/* An old session without a group: its code is the way in. */}
+                  {session.groupId == null && <code>{session.id}</code>}
                 </div>
 
                 {(session.status === "active" ||

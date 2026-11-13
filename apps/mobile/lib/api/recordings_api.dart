@@ -17,7 +17,6 @@ class RecordingSession {
     this.groupId,
     this.scheduledAt,
     this.memberCount,
-    this.totalRecordings,
     this.recordingCount,
     this.createdBy,
     this.thumbnailUrl,
@@ -37,9 +36,6 @@ class RecordingSession {
 
   /// Null for sessions that predate attendance tracking.
   final int? memberCount;
-
-  /// Angles (one per phone per take) across the session.
-  final int? totalRecordings;
 
   /// Takes: Recording 001, 002, ...
   final int? recordingCount;
@@ -73,7 +69,6 @@ class RecordingSession {
             ? null
             : DateTime.tryParse(json['scheduledAt'].toString())?.toLocal(),
         memberCount: (json['memberCount'] as num?)?.toInt(),
-        totalRecordings: (json['totalRecordings'] as num?)?.toInt(),
         recordingCount: (json['recordingCount'] as num?)?.toInt(),
         createdBy: (json['createdBy'] as num?)?.toInt(),
         thumbnailUrl: json['thumbnailUrl'] as String?,
@@ -346,14 +341,6 @@ class RecordingsApi {
         .toList();
   }
 
-  /// Joins (or re-joins) a session, which also flips a scheduled session to
-  /// active. Must succeed before the socket room will accept this user.
-  /// How many videos this account has uploaded, across all groups.
-  Future<int> getMyVideoCount() async {
-    final data = await _api.get('/api/recordings/my-video-count');
-    return ((data as Map)['count'] as num).toInt();
-  }
-
   /// Schedule a session for one of the user's groups (admins and owner).
   Future<RecordingSession> scheduleSession({
     required String groupId,
@@ -369,14 +356,13 @@ class RecordingsApi {
         Map<String, dynamic>.from((data as Map)['session'] as Map));
   }
 
-  /// Start a session right now: for a group (its admins and owner), or with
-  /// no [groupId], one anyone can join with its code.
+  /// Start a session right now, for a group (its admins and owner).
   Future<RecordingSession> createLiveSession({
-    String? groupId,
+    required String groupId,
     required String name,
   }) async {
     final data = await _api.post('/api/recordings/sessions/live', {
-      if (groupId != null) 'groupId': groupId,
+      'groupId': groupId,
       'name': name,
     });
     return RecordingSession.fromJson(
@@ -403,6 +389,8 @@ class RecordingsApi {
     await _api.delete('/api/recordings/sessions/$id');
   }
 
+  /// Joins (or re-joins) a session, which also flips a scheduled session to
+  /// active. Must succeed before the socket room will accept this user.
   Future<RecordingSession> joinSession(String id) async {
     final data = await _api.post('/api/recordings/sessions/$id/join');
     return RecordingSession.fromJson(
@@ -448,6 +436,23 @@ class RecordingsApi {
   Future<void> deleteRecording(String id, int startedAtMs) async {
     await _api.delete('/api/recordings/sessions/$id/recordings/$startedAtMs');
   }
+
+  /// Asks the server to make the session's download (every angle side by
+  /// side, lined up), or with [startedAtMs] just that recording's, and says
+  /// how far along it is. Safe to repeat: ask every couple of seconds until
+  /// it's ready, then fetch [downloadPath].
+  Future<ExportStatus> requestSyncedDownload(String id,
+      {int? startedAtMs}) async {
+    final one = startedAtMs == null ? '' : '?startedAt=$startedAtMs';
+    final data = await _api.post('/api/recordings/sessions/$id/exports$one');
+    return ExportStatus.fromJson(Map<String, dynamic>.from(data as Map));
+  }
+
+  /// Where the session's lined-up zip is, server-relative; with
+  /// [startedAtMs], that recording's video (an MP4, no zip).
+  static String downloadPath(String id, {int? startedAtMs}) =>
+      '/api/recordings/sessions/$id/download?kind=synced'
+      '${startedAtMs == null ? '' : '&startedAt=$startedAtMs'}';
 
   Future<void> deleteSessionNote(String id, int noteId) async {
     await _api.delete('/api/recordings/sessions/$id/notes/$noteId');
@@ -604,4 +609,44 @@ class RecordingsApi {
         'stage': stage,
         'fraction': fraction,
       });
+}
+
+/// How far along the server is with a session's download.
+class ExportStatus {
+  const ExportStatus({
+    required this.state,
+    required this.progress,
+    required this.waiting,
+    this.error,
+  });
+
+  /// 'queued', 'working', 'ready' or 'failed'.
+  final String state;
+
+  /// 0 to 1.
+  final double progress;
+
+  /// Other people's downloads the server is making first.
+  final int waiting;
+  final String? error;
+
+  bool get isReady => state == 'ready';
+  bool get isFailed => state == 'failed';
+
+  factory ExportStatus.fromJson(Map<String, dynamic> json) => ExportStatus(
+        state: json['state'] as String? ?? 'queued',
+        progress: (json['progress'] as num?)?.toDouble() ?? 0,
+        waiting: (json['waiting'] as num?)?.toInt() ?? 0,
+        error: json['error'] as String?,
+      );
+
+  /// What to show while it's made. Mirrors downloadStatusText on the web.
+  String describe() {
+    if (isFailed) return error ?? "Couldn't make the download.";
+    if (isReady) return 'Ready. Downloading…';
+    if (state == 'queued' && waiting > 0) {
+      return 'Waiting for $waiting other download${waiting == 1 ? '' : 's'} to finish…';
+    }
+    return 'Lining up the videos… ${(progress * 100).floor()}%';
+  }
 }

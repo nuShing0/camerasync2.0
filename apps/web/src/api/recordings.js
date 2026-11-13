@@ -28,12 +28,6 @@ async function request(path, options = {}) {
   return data;
 }
 
-// counts the signed-in user's uploaded videos
-export async function getMyVideoCount() {
-  const data = await request("/api/recordings/my-video-count");
-  return data.count;
-}
-
 // loads sessions visible to the current user
 export async function getSessions() {
   const data = await request("/api/recordings/sessions");
@@ -116,11 +110,24 @@ export async function getSessionVideos(id) {
   return data;
 }
 
-// The whole session as one zip (a folder per recording, an angle per
-// member), for keeping on a computer or USB stick. A plain link: the
-// browser downloads it with the login cookie.
-export function sessionDownloadUrl(id) {
-  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download`;
+// The whole session as one zip to keep on a computer or USB stick: a video
+// per recording with every angle side by side, lined up like the player.
+// With `startedAt`, just that recording's video (an MP4, no zip). A plain
+// link: the browser downloads it with the login cookie. It has to be made
+// first: see requestSyncedDownload.
+export function sessionDownloadUrl(id, startedAt) {
+  return `${SERVER_URL}/api/recordings/sessions/${encodeURIComponent(id)}/download?kind=synced` +
+    (startedAt ? `&startedAt=${startedAt}` : "");
+}
+
+// Asks the server to make the session's download (or, with `startedAt`, one
+// recording's), and how far along it is:
+// { state: "queued" | "working" | "ready" | "failed", progress (0-1),
+// waiting (other people's downloads ahead), error }. Safe to repeat; ask
+// every few seconds until it's ready.
+export async function requestSyncedDownload(id, startedAt) {
+  const one = startedAt ? `?startedAt=${startedAt}` : "";
+  return request(`/api/recordings/sessions/${encodeURIComponent(id)}/exports${one}`, { method: "POST" });
 }
 
 // `signal` stops it part way (a take starting): it then rejects with an

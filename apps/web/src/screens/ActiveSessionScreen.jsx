@@ -741,7 +741,7 @@ export function ActiveSessionScreen() {
             <p>
               {isCreator
                 ? "You're the host, so leaving closes the session for everyone. Every camera stops and no more takes can be recorded."
-                : "You'll stop being a camera in this session. You can join again with its code."}
+                : "You'll stop being a camera in this session. You can join again from its card in Sessions."}
             </p>
             {recordingStatus !== "idle" && <p>A take is recording; it stops here now.</p>}
             <div>
@@ -771,7 +771,8 @@ export function ActiveSessionScreen() {
           <h1>{session?.name || "Loading session..."}</h1>
           {session && (
             <span>
-              {groupName && <>{groupName} · </>}code <code>{session.id}</code>
+              {/* An old session without a group: its code is the way in. */}
+              {session.groupId != null ? groupName : <>code <code>{session.id}</code></>}
             </span>
           )}
         </div>

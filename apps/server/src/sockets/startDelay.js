@@ -11,7 +11,8 @@
 export const MIN_START_DELAY_MS = 1500;
 
 // Never longer, however bad a connection looks; a device later than this
-// still starts as soon as the command arrives and is lined up by the beep.
+// still starts as soon as the command arrives and is lined up by its first
+// frame.
 export const MAX_START_DELAY_MS = 5000;
 
 // What a phone needs to start its camera once the command arrives.
@@ -54,22 +55,13 @@ export function trackRoundTrips(socket, now = Date.now) {
 export const MIN_STOP_DELAY_MS = 600;
 
 // When a stop takes effect. A take that hasn't reached its shared start yet
-// is simply cancelled. Otherwise every camera stops once the command has
-// reached the slowest device.
-//
-// Cameras used to roll on after that for an end beep (and a very short take
-// was stretched to keep it clear of the start beep). Angles are lined up by
-// each camera's first frame now and no device plays the beeps, so a stop is
-// only as late as the network needs. endBeepAtEpochMs is still sent, at the
-// stop, for app versions that read it (a non-null one tells them the take
-// wasn't cancelled).
-export function stopSchedule(roundTripsMs, startAtEpochMs, now) {
-  if (now < startAtEpochMs) {
-    return { stopAtEpochMs: now, endBeepAtEpochMs: null };
-  }
+// is cancelled at once (devices see the stop land before the start).
+// Otherwise every camera stops once the command has reached the slowest
+// device.
+export function stopAt(roundTripsMs, startAtEpochMs, now) {
+  if (now < startAtEpochMs) return now;
   const known = roundTripsMs.filter((ms) => Number.isFinite(ms) && ms >= 0);
   const slowest = known.length > 0 ? Math.max(...known) : 0;
   const delay = Math.min(MAX_START_DELAY_MS, Math.max(MIN_STOP_DELAY_MS, Math.round(slowest + 300)));
-  const stopAtEpochMs = now + delay;
-  return { stopAtEpochMs, endBeepAtEpochMs: stopAtEpochMs };
+  return now + delay;
 }

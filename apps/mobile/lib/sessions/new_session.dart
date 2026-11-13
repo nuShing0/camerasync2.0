@@ -60,8 +60,7 @@ Future<void> joinAndOpen(
 }
 
 /// What the + offers, nearest the button first. The nav bar grows into a
-/// panel of these (see home_shell.dart); [showNewSessionMenu] lists them in
-/// a sheet.
+/// panel of these (see home_shell.dart).
 const newSessionChoices = [
   (
     value: 'start',
@@ -75,64 +74,12 @@ const newSessionChoices = [
     title: 'Schedule a session',
     detail: 'Put one on the calendar for later.',
   ),
-  (
-    value: 'code',
-    icon: Icons.pin_outlined,
-    title: 'Join with a code',
-    detail: 'Enter the 6-character code someone shared.',
-  ),
 ];
-
-/// The + menu as a sheet. Returns true when a session was started or
-/// scheduled, so the session lists can refresh.
-Future<bool> showNewSessionMenu(BuildContext context, AuthService auth) async {
-  final team = TeamAccent.of(context);
-  final choice = await showModalBottomSheet<String>(
-    context: context,
-    backgroundColor: kSurface,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-    ),
-    builder: (context) {
-      Widget option(String value, IconData icon, String title, String detail) =>
-          ListTile(
-            contentPadding:
-                const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
-            leading: Icon(icon, color: team.accent, size: 28),
-            title: Text(title,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 17,
-                    fontWeight: FontWeight.w700)),
-            subtitle: Text(detail, style: const TextStyle(color: kMuted)),
-            onTap: () => Navigator.of(context).pop(value),
-          );
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final c in newSessionChoices)
-                option(c.value, c.icon, c.title, c.detail),
-            ],
-          ),
-        ),
-      );
-    },
-  );
-  if (choice == null || !context.mounted) return false;
-  return runNewSessionChoice(context, auth, choice);
-}
 
 /// Carries out one of [newSessionChoices]. True when a session was started
 /// or scheduled.
 Future<bool> runNewSessionChoice(
     BuildContext context, AuthService auth, String choice) async {
-  if (choice == 'code') {
-    await _joinWithCode(context, auth);
-    return false;
-  }
   return _newSession(context, auth, live: choice == 'start');
 }
 
@@ -150,10 +97,13 @@ Future<bool> _newSession(BuildContext context, AuthService auth,
     return false;
   }
   if (!context.mounted) return false;
-  // Anyone can start a session without a group (and share its code); only
-  // a group's admins can put one on the calendar.
-  if (!live && adminGroups.isEmpty) {
-    _toast(context, 'Only group admins can schedule sessions.');
+  // Every session is in a group (whose invite is the one code people
+  // share), started or scheduled by its owner or admins.
+  if (adminGroups.isEmpty) {
+    _toast(
+        context,
+        "Sessions are started by a group's owner or admins. Make a group, "
+        'or ask your coach to start one: it shows up here to join.');
     return false;
   }
   final created = await showModalBottomSheet<RecordingSession>(
@@ -179,39 +129,6 @@ Future<bool> _newSession(BuildContext context, AuthService auth,
   return true;
 }
 
-/// Joins any live session by its 6-character code: how people get into a
-/// session that has no group.
-Future<void> _joinWithCode(BuildContext context, AuthService auth) async {
-  final controller = TextEditingController();
-  final code = await showDialog<String>(
-    context: context,
-    builder: (context) => AlertDialog(
-      backgroundColor: kSurface,
-      title: const Text('Join with a code'),
-      content: TextField(
-        controller: controller,
-        autofocus: true,
-        maxLength: 6,
-        textCapitalization: TextCapitalization.none,
-        decoration: const InputDecoration(hintText: 'abc123'),
-        onSubmitted: (value) => Navigator.of(context).pop(value),
-      ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Cancel')),
-        FilledButton(
-            onPressed: () => Navigator.of(context).pop(controller.text),
-            child: const Text('Join')),
-      ],
-    ),
-  );
-  controller.dispose();
-  final id = code?.trim().toLowerCase() ?? '';
-  if (id.isEmpty || !context.mounted) return;
-  await joinAndOpen(context, auth, id);
-}
-
 /// Schedule a session for later, or start one now ([live]). Pops with the
 /// created session.
 class NewSessionSheet extends StatefulWidget {
@@ -232,8 +149,7 @@ class NewSessionSheet extends StatefulWidget {
 
 class NewSessionSheetState extends State<NewSessionSheet> {
   final _name = TextEditingController();
-  // '' means no group, which only a live session can have.
-  late String _groupId = widget.groups.isEmpty ? '' : widget.groups.first.id;
+  late String _groupId = widget.groups.first.id;
   late DateTime _when = DateTime.now()
       .add(const Duration(hours: 1))
       .copyWith(minute: 0, second: 0, millisecond: 0, microsecond: 0);
@@ -281,7 +197,7 @@ class NewSessionSheetState extends State<NewSessionSheet> {
     try {
       final session = widget.live
           ? await widget.recordings.createLiveSession(
-              groupId: _groupId.isEmpty ? null : _groupId, name: name)
+              groupId: _groupId, name: name)
           : await widget.recordings.scheduleSession(
               groupId: _groupId, name: name, scheduledAt: _when);
       if (mounted) Navigator.of(context).pop(session);
@@ -321,9 +237,6 @@ class NewSessionSheetState extends State<NewSessionSheet> {
               items: [
                 for (final g in widget.groups)
                   DropdownMenuItem(value: g.id, child: Text(g.name)),
-                if (widget.live)
-                  const DropdownMenuItem(
-                      value: '', child: Text('No group (share the code)')),
               ],
               onChanged: _saving
                   ? null
