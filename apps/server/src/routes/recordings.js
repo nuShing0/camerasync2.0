@@ -596,8 +596,8 @@ const SYNCED_BY = {
 function syncedReadme(takes, opened) {
   const lines = [
     "Each video shows every angle of one recording side by side, lined up the same way as the",
-    `8Kount player: they all start at the same moment. A big recording is split across several`,
-    `videos, up to ${MAX_PER_GRID} angles each.`,
+    "8Kount player: they all start at the same moment, and a phone that stopped early stays on",
+    `its last frame. A big recording is split across several videos, up to ${MAX_PER_GRID} angles each.`,
     "",
   ];
   for (const [t, take] of takes.entries()) {
@@ -609,9 +609,11 @@ function syncedReadme(takes, opened) {
       continue;
     }
     lines.push(`${recording} (${formatSeconds(grid.length)})`);
-    for (const angle of grid.angles) {
+    for (const [a, angle] of grid.angles.entries()) {
       const how = SYNCED_BY[angle.syncedBy] ?? "not measured, kept as recorded";
-      lines.push(`  ${angle.name}: ${angle.skip.toFixed(3)} s trimmed from the start (${how})`);
+      const end = grid.ends?.[a];
+      const stopped = end != null && end < grid.length - 1 ? `; stopped at ${formatSeconds(end)}` : "";
+      lines.push(`  ${angle.name}: ${angle.skip.toFixed(3)} s trimmed from the start (${how})${stopped}`);
     }
     if (grid.videos.length > 1) {
       for (const [g, video] of grid.videos.entries()) {

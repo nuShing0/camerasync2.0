@@ -28,14 +28,14 @@ describe("syncWindow", () => {
     expect(skips).toEqual([0.97, 0, 0.34]);
   });
 
-  it("ends them together, when the first one stopped", () => {
+  it("runs until the last one stopped, like the player", () => {
     const { length } = syncWindow([
       { startOffsetMs: 0, duration: 30 },     // runs to 30 s
-      { startOffsetMs: 500, duration: 28 },   // to 28.5 s: first to stop
-      { startOffsetMs: 200, duration: 31 },
+      { startOffsetMs: 500, duration: 8 },    // left the app: stops at 8.5 s
+      { startOffsetMs: 200, duration: 31 },   // to 31.2 s: last to stop
     ]);
-    // Shared start 0.5 s, shared end 28.5 s.
-    expect(length).toBe(28);
+    // Shared start 0.5 s, end 31.2 s.
+    expect(length).toBe(30.7);
   });
 
   it("counts an angle without an offset as on time, as the player does", () => {
@@ -45,10 +45,10 @@ describe("syncWindow", () => {
     ]).skips).toEqual([0.25, 0]);
   });
 
-  it("gives up when the angles don't overlap", () => {
+  it("gives up when there's nothing after the shared start", () => {
     expect(syncWindow([
       { startOffsetMs: 0, duration: 2 },
-      { startOffsetMs: 2_000, duration: 10 },
+      { startOffsetMs: 2_000, duration: 0.2 },
     ])).toBeNull();
     expect(syncWindow([])).toBeNull();
   });
@@ -83,14 +83,22 @@ describe("gridLayout", () => {
 describe("gridArgs", () => {
   const window = { skips: [0.97, 0, 0.34], length: 28, portrait: false, audioFrom: 1 };
 
-  it("cuts each input to the shared window", () => {
+  it("starts each input at the shared start and runs the whole length", () => {
     const { args } = gridArgs(["a.mp4", "b.mp4", "c.mp4"], "grid.mp4", window);
     const inputs = args.reduce((list, arg, i) => (arg === "-i" ? [...list, i] : list), []);
-    expect(inputs.map((i) => args.slice(i - 4, i))).toEqual([
-      ["-ss", "0.97", "-t", "28"],
-      ["-ss", "0", "-t", "28"],
-      ["-ss", "0.34", "-t", "28"],
+    expect(inputs.map((i) => args.slice(i - 2, i))).toEqual([
+      ["-ss", "0.97"],
+      ["-ss", "0"],
+      ["-ss", "0.34"],
     ]);
+    expect(args[args.lastIndexOf("-t") + 1]).toBe("28");
+  });
+
+  it("holds an angle's last frame once it ends, as the player does", () => {
+    const { args } = gridArgs(["a.mp4", "b.mp4"], "grid.mp4", { ...window, skips: [0, 0] });
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    expect(graph.match(/tpad=stop_mode=clone:stop=-1/g)).toHaveLength(2);
+    expect(graph).toContain("[1:a:0]apad[sound]");
   });
 
   it("letterboxes each angle into its cell and stacks them", () => {
@@ -102,7 +110,8 @@ describe("gridArgs", () => {
 
   it("takes the sound from one angle only", () => {
     const { args } = gridArgs(["a.mp4", "b.mp4"], "grid.mp4", { ...window, skips: [0, 0] });
-    expect(args.filter((arg) => /^\d+:a:0$/.test(arg))).toEqual(["1:a:0"]);
+    const graph = args[args.indexOf("-filter_complex") + 1];
+    expect(graph.match(/\[\d+:a:0\]/g)).toEqual(["[1:a:0]"]);
     const silent = gridArgs(["a.mp4", "b.mp4"], "grid.mp4", { ...window, skips: [0, 0], audioFrom: null });
     expect(silent.args.some((arg) => /:a:/.test(arg))).toBe(false);
   });
@@ -111,7 +120,7 @@ describe("gridArgs", () => {
     // With the defaults a 5-angle grid reached 1.3 GB on the 1.9 GB server.
     const { args } = gridArgs(["a.mp4", "b.mp4", "c.mp4"], "grid.mp4", window);
     const inputs = args.flatMap((arg, i) => (arg === "-i" ? [i] : []));
-    for (const i of inputs) expect(args.slice(i - 6, i - 4)).toEqual(["-threads", "1"]);
+    for (const i of inputs) expect(args.slice(i - 4, i - 2)).toEqual(["-threads", "1"]);
     expect(args[args.indexOf("-filter_threads") + 1]).toBe("1");
   });
 

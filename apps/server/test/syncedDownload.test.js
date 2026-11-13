@@ -53,10 +53,12 @@ const ANGLES = [
   { name: "Ben", offsetMs: 400, seconds: 2.6 },
   { name: "Cy", offsetMs: 200, seconds: 2.0 },
 ];
-// The last to start (Ben, +400 ms) sets the shared start; the first to stop
-// (Cy: 0.2 s + 2.0 s) the shared end.
+// The last to start (Ben, +400 ms) sets the shared start; the last to stop
+// (Ana and Ben, at 3.0 s) the end, as in the player. Cy stops first (at
+// 0.2 s + 2.0 s, world frame 65) and holds that frame.
 const SHARED_START_FRAME = 12;
-const SHARED_SECONDS = 1.8;
+const SHARED_SECONDS = 2.6;
+const CY_LAST_FRAME = 65;
 const brightness = (worldFrame) => 16 + ((worldFrame * 4) % 200);
 
 const fileIdFor = (i) => `${RUN}${i}`.padEnd(32, "0") + ".mp4";
@@ -81,10 +83,10 @@ function makeVideo(file, { offsetMs, seconds, audio }) {
   if (result.status !== 0) throw new Error(String(result.stderr));
 }
 
-// Brightness of the first frame, in a w x h box at x, y.
-function firstFrameBrightness(file, { x, y, w, h }) {
+// Brightness of the frame `at` seconds in, in a w x h box at x, y.
+function frameBrightness(file, { x, y, w, h }, at = 0) {
   const result = spawnSync("ffmpeg", [
-    "-v", "info", "-i", file, "-frames:v", "1",
+    "-v", "info", "-ss", String(at), "-i", file, "-frames:v", "1",
     "-vf", `crop=${w}:${h}:${x}:${y},signalstats,metadata=print:key=lavfi.signalstats.YAVG`,
     "-f", "null", "-",
   ]);
@@ -258,11 +260,18 @@ describe("the synced session download", () => {
     const info = probe(grid);
     expect(info).toMatchObject({ width: 1280, height: 720, hasAudio: true });
     expect(Math.abs(info.duration - SHARED_SECONDS)).toBeLessThan(0.1);
+    // The middle of each cell (Ana, Ben, then Cy centred on the last row).
+    const cells = [[0, 0], [640, 0], [320, 360]].map(([x, y]) => ({ x: x + 220, y: y + 80, w: 200, h: 200 }));
     // Every cell starts on the same moment (frame-exact, though 12 frames is
-    // mid-GOP for Ana): the middle of each cell, the last row centred.
-    for (const [x, y] of [[0, 0], [640, 0], [320, 360]]) {
-      const cell = { x: x + 220, y: y + 80, w: 200, h: 200 };
-      expect(Math.abs(firstFrameBrightness(grid, cell) - brightness(SHARED_START_FRAME))).toBeLessThan(2);
+    // mid-GOP for Ana)...
+    for (const cell of cells) {
+      expect(Math.abs(frameBrightness(grid, cell) - brightness(SHARED_START_FRAME))).toBeLessThan(2);
     }
+    // ...and after Cy stopped, Ana and Ben play on while Cy holds his last frame.
+    const at = 2.3;
+    const now = SHARED_START_FRAME + Math.round(at * FPS);
+    expect(Math.abs(frameBrightness(grid, cells[0], at) - brightness(now))).toBeLessThan(2);
+    expect(Math.abs(frameBrightness(grid, cells[1], at) - brightness(now))).toBeLessThan(2);
+    expect(Math.abs(frameBrightness(grid, cells[2], at) - brightness(CY_LAST_FRAME))).toBeLessThan(2);
   }, 60_000);
 });

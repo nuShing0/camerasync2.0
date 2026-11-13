@@ -6,8 +6,9 @@
 // don't line up. The player fixes that live by skipping each angle ahead by
 // its stored start_offset_ms (see angleTrims.js on the web). The grid video
 // does the same: every angle cut to start at the same instant (when the
-// last camera began) and end together (when the first one stopped), side
-// by side in one MP4 (several, of up to MAX_PER_GRID angles each, for a big
+// last camera began), running until the last one stopped, as the player
+// does; an angle that stopped early (someone left the app) holds its last
+// frame, as it does in the player. Side by side in one MP4 (several, of up to MAX_PER_GRID angles each, for a big
 // take), built from the 720p previews (see previews.js) to keep it cheap.
 // Being re-encoded anyway, it is cut on the exact frame.
 //
@@ -42,7 +43,7 @@ const CACHE_MAX_AGE_MS = Number(process.env.EXPORT_CACHE_HOURS || 72) * 3600 * 1
 const FAILURE_MEMORY_MS = 60_000;
 const TIMEOUT_MS = 60 * 60 * 1000;
 
-// Shorter than this together, the angles don't really overlap.
+// Shorter than this from the shared start, there's nothing to show.
 const MIN_SHARED_SECONDS = 0.5;
 
 // The grid: each cell fits a 16:9 (or 9:16) 640x360 box, the whole frame
@@ -57,18 +58,18 @@ export const MAX_PER_GRID = 6;
 
 // --- Planning (pure) -------------------------------------------------------
 
-/// Where each angle is cut so a take lines up: the shared start is when the
-/// last camera began, the shared end when the first one stopped. Offsets are
-/// how much later each camera began than the take's start (ms; unknown counts
-/// as on time, as in the player); durations are each file's length (s).
-/// Returns { skips: seconds to cut from each start, length } or null when the
-/// angles don't overlap.
+/// Where each angle is cut so a take lines up, like the player: the shared
+/// start is when the last camera began, the end when the last one stopped.
+/// Offsets are how much later each camera began than the take's start (ms;
+/// unknown counts as on time, as in the player); durations are each file's
+/// length (s). Returns { skips: seconds to cut from each start, length } or
+/// null when there's (next to) nothing after the shared start.
 export function syncWindow(angles) {
   if (angles.length === 0) return null;
   const offsets = angles.map((angle) => angle.startOffsetMs ?? 0);
   const latest = Math.max(...offsets);
   const skips = offsets.map((offset) => round3((latest - offset) / 1000));
-  const length = round3(Math.min(...angles.map((angle, i) => angle.duration - skips[i])));
+  const length = round3(Math.max(...angles.map((angle, i) => angle.duration - skips[i])));
   if (!Number.isFinite(length) || length < MIN_SHARED_SECONDS) return null;
   return { skips, length };
 }
@@ -102,10 +103,11 @@ function even(value) {
   return Math.floor(value / 2) * 2;
 }
 
-/// ffmpeg arguments for the grid video: each angle cut to the shared window,
-/// fitted into its cell (letterboxed, never stretched), stacked with xstack.
-/// Sound comes from one angle (`audioFrom`, an index, or null for none):
-/// mixing every phone's would echo.
+/// ffmpeg arguments for the grid video: each angle started at its skip,
+/// fitted into its cell (letterboxed, never stretched), stacked with xstack,
+/// `length` long; an angle that ends sooner holds its last frame. Sound
+/// comes from one angle (`audioFrom`, an index, or null for none): mixing
+/// every phone's would echo. Silence after it ends.
 export function gridArgs(inputs, output, { skips, length, portrait, audioFrom }) {
   const layout = gridLayout(inputs.length, portrait);
   const args = ["-v", "error", "-nostats", "-progress", "pipe:1", "-y"];
@@ -113,21 +115,27 @@ export function gridArgs(inputs, output, { skips, length, portrait, audioFrom })
   // frames) a 5-angle grid reached 1.3 GB on the 1.9 GB server and was
   // killed. One decoding thread per input still decodes them in parallel.
   inputs.forEach((input, i) => {
-    args.push("-threads", "1", "-ss", String(skips[i]), "-t", String(length), "-i", input);
+    args.push("-threads", "1", "-ss", String(skips[i]), "-i", input);
   });
   const { cellW: w, cellH: h } = layout;
   const fitted = inputs.map((_, i) =>
     `[${i}:v:0]fps=${GRID_FPS},scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
-    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v${i}]`);
+    `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,` +
+    // Ended: the last frame, until the grid's end (-t below).
+    `tpad=stop_mode=clone:stop=-1[v${i}]`);
   const stacked = inputs.length === 1
     ? "[v0]null[grid]"
     : `${inputs.map((_, i) => `[v${i}]`).join("")}xstack=inputs=${inputs.length}:` +
       `layout=${layout.cells.map(({ x, y }) => `${x}_${y}`).join("|")}:fill=black[grid]`;
   args.push(
     "-filter_threads", "1",
-    "-filter_complex", [...fitted, stacked].join(";"),
+    "-filter_complex", [
+      ...fitted,
+      stacked,
+      ...(audioFrom == null ? [] : [`[${audioFrom}:a:0]apad[sound]`]),
+    ].join(";"),
     "-map", "[grid]",
-    ...(audioFrom == null ? [] : ["-map", `${audioFrom}:a:0`]),
+    ...(audioFrom == null ? [] : ["-map", "[sound]"]),
     "-t", String(length),
     "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-threads", "2",
     ...(audioFrom == null ? [] : ["-c:a", "aac", "-b:a", "128k"]),
@@ -157,7 +165,7 @@ export function exportKey(kind, take) {
     .map((a) => [a.fileId, a.startOffsetMs ?? null])
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
   return crypto.createHash("sha256")
-    .update(JSON.stringify({ v: 3, kind, angles }))
+    .update(JSON.stringify({ v: 4, kind, angles }))
     .digest("hex")
     .slice(0, 32);
 }
@@ -504,7 +512,7 @@ async function plan(job, work, sourceIds) {
     startOffsetMs: angle.startOffsetMs,
     duration: infos[i].duration,
   })));
-  if (!window) throw userFacing("These angles don't overlap, so they can't be lined up.");
+  if (!window) throw userFacing("These videos are too short to put together.");
   return { files, infos, window };
 }
 
@@ -524,10 +532,15 @@ async function makeGrid(job) {
       if (job.cancelled) return null;
       const portrait =
         group.filter((i) => infos[i].height > infos[i].width).length > group.length / 2;
-      const audioFrom = group.findIndex((i) => infos[i].hasAudio);
+      // Sound from the angle that runs longest (the first of those).
+      const runs = (i) => infos[i].duration - window.skips[i];
+      const audioFrom = group.reduce((best, i, at) => (infos[i].hasAudio
+        && (best === -1 || runs(i) > runs(group[best]) + 0.5) ? at : best), -1);
       const file = `grid-${g + 1}.mp4`;
       const { args } = gridArgs(group.map((i) => files[i]), path.join(work, file), {
-        skips: group.map((i) => window.skips[i]),
+        // One that stopped before the shared start shows its last frame,
+        // as in the player.
+        skips: group.map((i) => Math.min(window.skips[i], Math.max(0, round3(infos[i].duration - 0.1)))),
         length: window.length,
         portrait,
         audioFrom: audioFrom === -1 ? null : audioFrom,
@@ -546,6 +559,8 @@ async function makeGrid(job) {
     return {
       kind: "grid",
       length: window.length,
+      // When each angle stopped, from the shared start (s).
+      ends: take.angles.map((_, i) => round3(Math.max(0, infos[i].duration - window.skips[i]))),
       // How each angle was cut, for the note in the zip.
       angles: take.angles.map((angle, i) => ({
         name: angle.name,
