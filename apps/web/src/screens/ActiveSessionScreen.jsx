@@ -699,6 +699,11 @@ export function ActiveSessionScreen() {
             <button type="button" aria-pressed={controllerOnly} disabled={busy}
               onClick={() => setControllerOnly(true)}>Control only</button>
           </div>
+        ) : controllerOnly ? (
+          <div className="session-device-mode" role="group" aria-label="This device">
+            <button type="button" aria-pressed="false" disabled={busy}
+              onClick={() => setControllerOnly(false)}>Turn camera on</button>
+          </div>
         ) : <span />}
         <div className="session-shutter-wrap">
           {canControl && (
@@ -800,8 +805,10 @@ export function ActiveSessionScreen() {
           <main className={recording ? "session-stage session-stage-rec" : "session-stage"}>
             {controllerOnly ? (
               <div className="session-controller-note">
-                <h2>Controlling the cameras</h2>
-                <p>This device isn't recording. Start and stop every camera from here.</p>
+                <h2>{mayControl ? "Controlling the cameras" : "No camera"}</h2>
+                <p>{mayControl
+                  ? "This device isn't recording. Start and stop every camera from here."
+                  : "This device isn't recording. You're still in the session."}</p>
                 {ready && stageControls}
               </div>
             ) : (
@@ -809,7 +816,11 @@ export function ActiveSessionScreen() {
                 disabled={busy}
                 onReady={handleMediaReady}
                 onDecline={declineMedia}
-                onControlOnly={mayControl && !busy ? () => setControllerOnly(true) : undefined}
+                // Another app has the camera (or it's blocked): stay in
+                // without it. Hosts and admins run the take from here;
+                // anyone else just stays in until the camera is free.
+                onControlOnly={busy ? undefined : () => setControllerOnly(true)}
+                controlOnlyLabel={mayControl ? "Control only" : "Continue without camera"}
               >
                 {ready && stageControls}
               </LocalMediaPreview>
@@ -842,7 +853,7 @@ export function ActiveSessionScreen() {
                           <small>
                             {[
                               Number(member.id) === Number(session.createdBy) && "Host",
-                              member.camera === false ? "Controller" : "Camera",
+                              member.camera === false ? "No camera" : "Camera",
                             ].filter(Boolean).join(" · ")}
                           </small>
                         </span>

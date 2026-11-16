@@ -33,6 +33,7 @@ class CameraScreen extends StatefulWidget {
     this.topBar,
     this.onWatch,
     this.onControlOnly,
+    this.onSkipCamera,
   });
 
   final SyncSocket? socket;
@@ -62,6 +63,11 @@ class CameraScreen extends StatefulWidget {
   /// For hosts and admins: turns this phone's camera off to just run the
   /// take, from a button on the shutter's other side.
   final VoidCallback? onControlOnly;
+
+  /// When the camera can't start: stay in the session without it (control
+  /// only for those who run the session, just staying in for anyone else).
+  /// Falls back to [onControlOnly].
+  final VoidCallback? onSkipCamera;
 
   bool get isSolo => socket == null;
 
@@ -533,7 +539,7 @@ class _CameraScreenState extends State<CameraScreen> {
 
   /// The camera couldn't start or stopped: why, and what to do about it.
   Widget _cameraErrorView(String message) {
-    final controlOnly = widget.onControlOnly;
+    final skip = widget.onSkipCamera ?? widget.onControlOnly;
     return ColoredBox(
       color: Colors.black,
       child: Center(
@@ -564,11 +570,13 @@ class _CameraScreenState extends State<CameraScreen> {
                 onPressed: _retryCamera,
                 child: const Text('Try again'),
               ),
-              if (controlOnly != null) ...[
+              if (skip != null) ...[
                 const SizedBox(height: 8),
                 TextButton(
-                  onPressed: controlOnly,
-                  child: const Text('Control only (no camera)'),
+                  onPressed: skip,
+                  child: Text(widget.canControl
+                      ? 'Control only (no camera)'
+                      : 'Continue without camera'),
                 ),
               ],
             ],

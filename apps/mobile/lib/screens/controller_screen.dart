@@ -16,6 +16,7 @@ class ControllerScreen extends StatefulWidget {
     required this.topBar,
     required this.onUseCamera,
     required this.onWatch,
+    this.canControl = true,
   });
 
   final SyncSocket socket;
@@ -28,6 +29,10 @@ class ControllerScreen extends StatefulWidget {
 
   /// Opens the session's recordings (greyed out while a take runs).
   final VoidCallback onWatch;
+
+  /// Whether this person runs the session. Anyone else here has no camera
+  /// (another app had it) and just stays in, without the shutter.
+  final bool canControl;
 
   @override
   State<ControllerScreen> createState() => _ControllerScreenState();
@@ -155,8 +160,11 @@ class _ControllerScreenState extends State<ControllerScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Control only: this phone isn't recording."
-                        '${controlling > 1 ? ' $controlling people are controlling.' : ''}',
+                        widget.canControl
+                            ? "Control only: this phone isn't recording."
+                                '${controlling > 1 ? ' $controlling people are controlling.' : ''}'
+                            : "No camera: this phone isn't recording. "
+                                "You're still in the session.",
                         textAlign: TextAlign.center,
                         style:
                             const TextStyle(color: Colors.white70, height: 1.4),
@@ -175,34 +183,37 @@ class _ControllerScreenState extends State<ControllerScreen> {
                   onPressed: active ? null : widget.onWatch,
                 ),
                 const SizedBox(width: 28),
-                Semantics(
-                  button: true,
-                  label: active ? 'Stop all cameras' : 'Start all cameras',
-                  child: GestureDetector(
-                    onTap: _startOrStop,
-                    child: Container(
-                      width: 72,
-                      height: 72,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white24,
-                        border: Border.all(color: Colors.white, width: 3),
-                      ),
-                      child: Center(
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 180),
-                          width: active ? 28 : 56,
-                          height: active ? 28 : 56,
-                          decoration: BoxDecoration(
-                            color: Colors.redAccent,
-                            borderRadius:
-                                BorderRadius.circular(active ? 6 : 28),
+                if (!widget.canControl)
+                  const SizedBox.square(dimension: 72)
+                else
+                  Semantics(
+                    button: true,
+                    label: active ? 'Stop all cameras' : 'Start all cameras',
+                    child: GestureDetector(
+                      onTap: _startOrStop,
+                      child: Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white24,
+                          border: Border.all(color: Colors.white, width: 3),
+                        ),
+                        child: Center(
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            width: active ? 28 : 56,
+                            height: active ? 28 : 56,
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent,
+                              borderRadius:
+                                  BorderRadius.circular(active ? 6 : 28),
+                            ),
                           ),
                         ),
                       ),
                     ),
                   ),
-                ),
                 const SizedBox(width: 28),
                 ShutterSideButton(
                   icon: Icons.videocam_off,

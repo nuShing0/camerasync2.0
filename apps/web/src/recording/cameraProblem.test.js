@@ -7,7 +7,7 @@ describe("cameraProblem", () => {
   it("says another app has the camera", () => {
     expect(cameraProblem(error("NotReadableError")).kind).toBe("busy");
     expect(cameraProblem(error("TrackStartError")).kind).toBe("busy");
-    expect(cameraProblem(error("NotReadableError")).message).toMatch(/another app/);
+    expect(cameraProblem(error("NotReadableError")).message).toMatch(/Another app/);
   });
 
   it("says the browser won't allow it", () => {
@@ -17,6 +17,14 @@ describe("cameraProblem", () => {
   it("says there's no camera", () => {
     expect(cameraProblem(error("NotFoundError")).kind).toBe("missing");
     expect(cameraProblem(error("OverconstrainedError")).kind).toBe("missing");
+  });
+
+  it("keeps every message short and names no other app", () => {
+    for (const name of ["NotReadableError", "NotAllowedError", "NotFoundError", "Other"]) {
+      const { message } = cameraProblem(error(name));
+      expect(message.length).toBeLessThan(90);
+      expect(message).not.toMatch(/Zoom|Teams|FaceTime/);
+    }
   });
 
   it("falls back to trying again", () => {
