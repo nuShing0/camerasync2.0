@@ -260,9 +260,22 @@ final class DefaultCamera: NSObject, Camera {
 
   @objc private func captureSessionWasInterrupted(notification: NSNotification) {
     isRecordingDisconnected = true
+    // 8kount: say why in the phone's log, and when the camera itself is cut
+    // off (another app, such as a video call, took it) tell the app, which
+    // shows what happened instead of a frozen camera and a take that never
+    // records. The microphone alone being taken keeps the picture going.
+    let reason =
+      (notification.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber)?.intValue ?? -1
+    let isVideo = (notification.object as AnyObject?) === (videoCaptureSession as AnyObject)
+    NSLog("8kount camera interrupted: %@ session, reason %d", isVideo ? "video" : "audio", reason)
+    if isVideo {
+      reportErrorMessage("Camera interrupted: another app is using it (reason \(reason))")
+    }
   }
 
   @objc private func captureSessionRuntimeError(notification: NSNotification) {
+    NSLog("8kount camera runtime error: %@",
+      String(describing: notification.userInfo?[AVCaptureSessionErrorKey]))
     reportErrorMessage(
       "\(String(describing: notification.userInfo?[AVCaptureSessionErrorKey] as? Error))")
   }

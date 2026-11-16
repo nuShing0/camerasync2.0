@@ -23,7 +23,19 @@ void main() {
 
   test('anything else still says what to try', () {
     expect(cameraProblemMessage(CameraException('weird', null)),
-        contains('try again'));
-    expect(cameraProblemMessage(null), contains('try again'));
+        contains('Try again'));
+    expect(cameraProblemMessage(null), contains('Try again'));
+  });
+
+  test('messages stay short and name no other app', () {
+    for (final e in [
+      'in use',
+      CameraException('CameraAccessDenied', null),
+      null,
+    ]) {
+      final message = cameraProblemMessage(e);
+      expect(message.length, lessThan(80));
+      expect(message, isNot(matches(RegExp('Zoom|Teams|FaceTime|video call'))));
+    }
   });
 }

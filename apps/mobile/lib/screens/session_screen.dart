@@ -324,6 +324,7 @@ class _SessionScreenState extends State<SessionScreen> {
         sessionId: widget.sessionId,
         members: _members,
         topBar: topBar,
+        canControl: _canControl,
         onUseCamera: _switching ? null : () => _setControllerOnly(false),
         onWatch: _watchRecordings,
       );
@@ -340,6 +341,8 @@ class _SessionScreenState extends State<SessionScreen> {
         // Hosts and admins can turn their camera off and just run the take.
         onControlOnly:
             _canControl && !_switching ? () => _setControllerOnly(true) : null,
+        // Another app has the camera: anyone can stay in without it.
+        onSkipCamera: _switching ? null : () => _setControllerOnly(true),
       );
     }
 
@@ -695,7 +698,7 @@ class _MemberRow extends StatelessWidget {
         if (member.camera)
           const Icon(Icons.videocam, size: 18, color: Colors.white70)
         else
-          const Text('Controlling',
+          const Text('No camera',
               style: TextStyle(color: Colors.white54, fontSize: 12)),
       ],
     );

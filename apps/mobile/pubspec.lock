@@ -186,10 +186,9 @@ packages:
   external_display:
     dependency: "direct main"
     description:
-      name: external_display
-      sha256: "494828458f47aa4d64d56ead6a2abe3b6511a631d45d1dab6e6673f4dbc1bff3"
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/external_display"
+      relative: true
+    source: path
     version: "0.4.3"
   fake_async:
     dependency: transitive

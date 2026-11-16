@@ -7,25 +7,23 @@ export function cameraProblem(err) {
   if (name === "NotReadableError" || name === "TrackStartError" || name === "AbortError") {
     return {
       kind: "busy",
-      message: "Your camera is being used by another app, like Zoom, Teams or FaceTime. "
-        + "Close the camera there (or turn your video off in that call), then try again.",
+      message: "Another app is using your camera. Turn it off there, then try again.",
     };
   }
   if (name === "NotAllowedError" || name === "PermissionDeniedError" || name === "SecurityError") {
     return {
       kind: "blocked",
-      message: "This browser isn't allowed to use your camera and microphone. "
-        + "Allow them from the camera icon in the address bar (or your computer's privacy settings), then try again.",
+      message: "Camera and microphone are blocked. Allow them in the address bar, then try again.",
     };
   }
   if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") {
     return {
       kind: "missing",
-      message: "No camera or microphone was found. Plug one in, then try again.",
+      message: "No camera or microphone found.",
     };
   }
   return {
     kind: "other",
-    message: "Your camera couldn't be started. Try again in a moment.",
+    message: "The camera couldn't start. Try again.",
   };
 }

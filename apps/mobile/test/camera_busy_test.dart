@@ -12,8 +12,7 @@ class _BusyCamera extends CameraPlatform {
   @override
   Future<List<CameraDescription>> availableCameras() async {
     opened++;
-    throw CameraException(
-        'cameraError', 'The camera is in use by another app');
+    throw CameraException('cameraError', 'The camera is in use by another app');
   }
 }
 
@@ -36,14 +35,14 @@ void main() {
       (tester) async {
     var controlOnly = 0;
     await tester.pumpWidget(MaterialApp(
-      home: CameraScreen(onControlOnly: () => controlOnly++),
+      home: CameraScreen(canControl: true, onControlOnly: () => controlOnly++),
     ));
     await tester.pump();
     await tester.pump();
 
     expect(find.text('Camera unavailable'), findsOneWidget);
-    expect(find.textContaining('Another app is using the camera'),
-        findsOneWidget);
+    expect(
+        find.textContaining('Another app is using the camera'), findsOneWidget);
 
     await tester.tap(find.text('Control only (no camera)'));
     expect(controlOnly, 1);
@@ -56,13 +55,17 @@ void main() {
     expect(find.text('Camera unavailable'), findsOneWidget);
   });
 
-  testWidgets('a member who cannot control only gets Try again',
-      (tester) async {
-    await tester.pumpWidget(const MaterialApp(home: CameraScreen()));
+  testWidgets('a member can continue without the camera', (tester) async {
+    var skipped = 0;
+    await tester.pumpWidget(MaterialApp(
+      home: CameraScreen(onSkipCamera: () => skipped++),
+    ));
     await tester.pump();
     await tester.pump();
 
     expect(find.text('Try again'), findsOneWidget);
     expect(find.text('Control only (no camera)'), findsNothing);
+    await tester.tap(find.text('Continue without camera'));
+    expect(skipped, 1);
   });
 }

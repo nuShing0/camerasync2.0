@@ -49,10 +49,12 @@ async function alreadyAllowed() {
 //
 // When the camera can't start (another app such as Zoom has it, the browser
 // blocks it, there's none) or stops partway, it says why and offers to try
-// again, or `onControlOnly` (to run the session from here without
-// recording) when given. It never leaves the session on its own; only
+// again, or `onControlOnly` (stay in the session without recording, named
+// by `controlOnlyLabel`) when given. It never leaves the session on its own; only
 // Decline on the first prompt does.
-export function LocalMediaPreview({ disabled, onReady, onDecline, onControlOnly, children }) {
+export function LocalMediaPreview({
+  disabled, onReady, onDecline, onControlOnly, controlOnlyLabel = "Control only", children,
+}) {
   const videoRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [devices, setDevices] = useState([]);
@@ -79,8 +81,7 @@ export function LocalMediaPreview({ disabled, onReady, onDecline, onControlOnly,
     const lost = () => {
       setFailure({
         kind: "lost",
-        message: "Your camera or microphone stopped. Another app may have taken it, "
-          + "or it was unplugged. Close it there, then try again.",
+        message: "Your camera stopped. Another app may be using it.",
       });
       setStream(null);
     };
@@ -205,7 +206,7 @@ export function LocalMediaPreview({ disabled, onReady, onDecline, onControlOnly,
         <div>
           {onControlOnly && (
             <button type="button" onClick={onControlOnly} disabled={requesting}>
-              Control only
+              {controlOnlyLabel}
             </button>
           )}
           <button className="media-accept-button" type="button" onClick={tryAgain}
@@ -213,11 +214,6 @@ export function LocalMediaPreview({ disabled, onReady, onDecline, onControlOnly,
             {requesting ? "Starting camera..." : "Try again"}
           </button>
         </div>
-        {onControlOnly && (
-          <p className="local-media-note">
-            Control only runs the session from here without this device recording.
-          </p>
-        )}
       </section>
     );
   }
