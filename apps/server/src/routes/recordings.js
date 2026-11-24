@@ -15,6 +15,7 @@ import { requireAuth } from "../middleware/requireAuth.js";
 import {
   ROLE_RANK,
   atLeast,
+  getGroupIdFromSessionId,
   getSessionRole,
   sessionVisibleSql,
 } from "../middleware/groupRole.js";
@@ -605,8 +606,7 @@ recordingsRouter.post("/sessions/:id/notes", requireAuth, async (req, res, next)
   const startedAt = Number(req.body?.startedAt);
   const videoTimeMs = Math.round(Number(req.body?.videoTimeMs ?? 0));
   const taggedUsers = Array.isArray(req.body?.taggedUsers) ? req.body.taggedUsers : [];
-  const groupId = req.body?.groupId
-
+  
   if (!body || body.length > 500) {
     return res.status(400).json({ error: "Notes must be 1 to 500 characters." });
   }
@@ -634,6 +634,7 @@ recordingsRouter.post("/sessions/:id/notes", requireAuth, async (req, res, next)
     }
 
     if (uniqueTaggedUsers.length > 0) {
+      const groupId = getGroupIdFromSessionId(req.params.id);
       if (!groupId) {
         return res.status(400).json({ error: "Recordings with tagged users must belong to a session started by a group" });
       }
@@ -679,11 +680,9 @@ recordingsRouter.post("/sessions/:id/notes", requireAuth, async (req, res, next)
 });
 
 // deletes a note the current user outranks, or one of their own
-// TODO: update query to retrieve list of users and update query to remove list of tagged users,
-// write new query to remove note from list of notes user has been tagged in
 recordingsRouter.delete("/sessions/:id/notes/:noteId", requireAuth, async (req, res, next) => {
   const noteId = Number(req.params.noteId);
-  if (!Number.isInteger(noteId)) {
+  if (!Number.isInteger(noteId) || noteId <= 0) {
     return res.status(400).json({ error: "Invalid note." });
   }
   try {
@@ -707,7 +706,10 @@ recordingsRouter.delete("/sessions/:id/notes/:noteId", requireAuth, async (req, 
     if (!canDeleteNote(rows[0], req.user.id, role)) {
       return res.status(403).json({ error: "You cannot delete this note." });
     }
-    await pool.query("DELETE FROM session_notes WHERE note_id = $1", [noteId]);
+    await pool.query(
+      "DELETE FROM session_notes WHERE note_id = $1 AND session_id = $2", 
+      [noteId, req.params.id]
+    );
     res.json({ ok: true });
   } catch (err) {
     next(err);
