@@ -557,6 +557,7 @@ function canDeleteNote(row, viewerId, viewerRole) {
 }
 
 // shapes note rows for the frontend
+// TODO: Add list of tagger userids
 function publicNote(row, viewerId, viewerRole) {
   return {
     id: Number(row.note_id),
@@ -568,6 +569,7 @@ function publicNote(row, viewerId, viewerRole) {
 }
 
 // lists one recording's notes for members of the session's group
+// TODO: Update SQL query with retriving list of tagged users
 recordingsRouter.get("/sessions/:id/notes", requireAuth, async (req, res, next) => {
   const startedAt = Number(req.query.startedAt);
   if (!Number.isSafeInteger(startedAt) || startedAt <= 0) {
@@ -602,6 +604,9 @@ recordingsRouter.post("/sessions/:id/notes", requireAuth, async (req, res, next)
   const body = String(req.body?.body ?? "").trim();
   const startedAt = Number(req.body?.startedAt);
   const videoTimeMs = Math.round(Number(req.body?.videoTimeMs ?? 0));
+  const taggedUsers = Array.isArray(req.body?.taggedUsers) ? req.body.taggedUsers : [];
+  const groupId = req.body?.groupId
+
   if (!body || body.length > 500) {
     return res.status(400).json({ error: "Notes must be 1 to 500 characters." });
   }
@@ -611,6 +616,8 @@ recordingsRouter.post("/sessions/:id/notes", requireAuth, async (req, res, next)
   if (!Number.isFinite(videoTimeMs) || videoTimeMs < 0) {
     return res.status(400).json({ error: "Invalid note time." });
   }
+
+  const client = await pool.connect();
   try {
     const role = await getSessionRole(req.params.id, req.user.id);
     if (!role) {
@@ -619,18 +626,61 @@ recordingsRouter.post("/sessions/:id/notes", requireAuth, async (req, res, next)
     if (!atLeast(role, "member")) {
       return res.status(403).json({ error: "Viewers can't leave notes." });
     }
-    await pool.query(
+
+    // Ensure all user ids are integers and remove any duplicates to avoid insertion errors
+    const uniqueTaggedUsers = [...new Set(taggedUsers.map(id => Number(id)))];
+    if (uniqueTaggedUsers.some(id => !Number.isInteger(id) || id <= 0)) {
+      return res.status(400).json({ error: "Invalid user ID in taggedUsers" });
+    }
+
+    if (uniqueTaggedUsers.length > 0) {
+      if (!groupId) {
+        return res.status(400).json({ error: "Recordings with tagged users must belong to a session started by a group" });
+      }
+
+      // Any role in the group can be tagged
+      const { rows } = await pool.query(
+        `SELECT user_id FROM group_members WHERE group_id = $1 AND user_id = ANY($2::bigint[])`,
+        [groupId, uniqueTaggedUsers]
+      );
+
+      if (rows.length !== uniqueTaggedUsers.length) {
+        return res.status(403).json({ error: "All tagged users must be members of the group" });
+      }
+    }
+
+    await client.query("BEGIN");
+    const { rows } = await client.query(
       `INSERT INTO session_notes (session_id, started_at_ms, user_id, body, video_time_ms)
-       VALUES ($1, $2, $3, $4, $5)`,
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING note_id`,
       [req.params.id, startedAt, req.user.id, body, videoTimeMs]
     );
-    res.status(201).json({ ok: true });
+    const noteId = rows[0].note_id;
+
+    if (uniqueTaggedUsers.length > 0) {
+      await client.query(
+      `INSERT INTO session_note_tags (note_id, user_id)
+       SELECT $1, UNNEST($2::bigint[])
+       ON CONFLICT DO NOTHING`,
+      [noteId, uniqueTaggedUsers]
+      );
+    }
+
+    await client.query("COMMIT");
+  
+    res.status(201).json({ ok: true, noteId });
   } catch (err) {
+    await client.query("ROLLBACK");
     next(err);
+  } finally {
+      client.release();
   }
 });
 
 // deletes a note the current user outranks, or one of their own
+// TODO: update query to retrieve list of users and update query to remove list of tagged users,
+// write new query to remove note from list of notes user has been tagged in
 recordingsRouter.delete("/sessions/:id/notes/:noteId", requireAuth, async (req, res, next) => {
   const noteId = Number(req.params.noteId);
   if (!Number.isInteger(noteId)) {
@@ -662,6 +712,12 @@ recordingsRouter.delete("/sessions/:id/notes/:noteId", requireAuth, async (req, 
   } catch (err) {
     next(err);
   }
+});
+
+// Returns list of all comments that the user has been tagged in, sorted by recording and session
+// TODO: write endpoint once we start working on SCRUM-12
+recordingsRouter.get("/sessions/taggednotes", requireAuth, async (req, res, next) => {
+
 });
 
 // schedules a session for one of the user's groups
