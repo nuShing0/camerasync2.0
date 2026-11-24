@@ -414,3 +414,22 @@ CREATE TABLE IF NOT EXISTS resumable_uploads (
 -- A recording deleted on its own (its videos are gone): the number stays
 -- taken, and late uploads for it are refused (see recordings/numbering.js).
 ALTER TABLE session_recordings ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+-- Users tagged in a session note. Goes both directions with one table
+-- who is tagged on a note, and which notes a user is tagged in
+CREATE TABLE IF NOT EXISTS session_note_tags (
+    note_id INTEGER NOT NULL REFERENCES session_notes(note_id) ON DELETE CASCADE,
+    user_id BIGINT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    read_at TIMESTAMPTZ,
+    PRIMARY KEY (note_id, user_id)
+);
+
+-- (shoould be fast) reverse lookup for fetching a user's tagged notes / notification feed.
+CREATE INDEX IF NOT EXISTS session_note_tags_user_idx
+    ON session_note_tags (user_id, created_at DESC);
+
+-- Keeps unread notification count/badge queries fast on the dashboard.
+CREATE INDEX IF NOT EXISTS session_note_tags_unread_idx
+    ON session_note_tags (user_id)
+    WHERE read_at IS NULL;
