@@ -78,7 +78,7 @@ export function sessionVisibleSql(rs, user) {
 
 /// Returns the group that a session belongs to, or null if sessionId is
 ///  invalid or refers to a standalone session
-export function getGroupIdFromSessionId(sessionId) {
+export async function getGroupIdFromSessionId(sessionId) {
   const { rows } = pool.query(
     `SELECT group_id
      FROM recording_sessions
