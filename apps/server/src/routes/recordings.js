@@ -558,7 +558,6 @@ function canDeleteNote(row, viewerId, viewerRole) {
 }
 
 // shapes note rows for the frontend
-// TODO: Add list of tagger userids
 function publicNote(row, viewerId, viewerRole) {
   return {
     id: Number(row.note_id),
@@ -566,11 +565,11 @@ function publicNote(row, viewerId, viewerRole) {
     videoTimeMs: Number(row.video_time_ms),
     author: row.display_name || "Unnamed member",
     canDelete: canDeleteNote(row, viewerId, viewerRole),
+    taggedUsers: row.tagged_users,
   };
 }
 
 // lists one recording's notes for members of the session's group
-// TODO: Update SQL query with retriving list of tagged users
 recordingsRouter.get("/sessions/:id/notes", requireAuth, async (req, res, next) => {
   const startedAt = Number(req.query.startedAt);
   if (!Number.isSafeInteger(startedAt) || startedAt <= 0) {
@@ -583,7 +582,22 @@ recordingsRouter.get("/sessions/:id/notes", requireAuth, async (req, res, next) 
     }
     const { rows } = await pool.query(
       `SELECT n.note_id, n.body, n.video_time_ms, n.user_id, rs.group_id, rs.created_by,
-              u.display_name, g.owner_id, gm.role
+              u.display_name, g.owner_id, gm.role,
+              COALESCE(
+                (
+                  SELECT json_agg(
+                            json_build_object(
+                              'user_id', tu.user_id,
+                              'display_name', COALESCE(tu.display_name, 'Unnamed member')
+                            )
+                            ORDER BY snt.created_at, tu.user_id
+                          )
+                  FROM session_note_tags snt
+                  JOIN users tu ON tu.user_id = snt.user_id
+                  WHERE snt.note_id = n.note_id
+                ),
+                '[]'::json
+       ) AS tagged_users
        FROM session_notes n
        JOIN recording_sessions rs ON rs.id = n.session_id
        LEFT JOIN groups g ON g.group_id = rs.group_id
